@@ -19,7 +19,19 @@ public sealed class DownloadBotService(
     ILogger<DownloadBotService> logger) : BackgroundService
 {
     // Search results for an in-flight picker, keyed by the picker message's id.
-    private readonly ConcurrentDictionary<ulong, IReadOnlyList<SearchResult>> _pendingPicks = new();
+    private readonly ConcurrentDictionary<ulong, PendingPick> _pendingPicks = new();
+
+    private sealed record PendingPick(string Type, IReadOnlyList<SearchResult> Results);
+
+    // Prefixed onto the RSS item title so qBittorrent's Auto Downloading Rules can match by plain string
+    // instead of guessing content type from often-inconsistent torrent titles.
+    private static readonly Dictionary<string, string> CategoryMarkers = new()
+    {
+        ["movie"] = "[DLBOT-MOVIE]",
+        ["tv"] = "[DLBOT-TV]",
+        ["kids-movie"] = "[DLBOT-KIDS-MOVIE]",
+        ["kids-tv"] = "[DLBOT-KIDS-TV]"
+    };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -56,7 +68,9 @@ public sealed class DownloadBotService(
             .AddOption("type", ApplicationCommandOptionType.String, "Content type", isRequired: true, choices:
             [
                 new ApplicationCommandOptionChoiceProperties { Name = "Movie", Value = "movie" },
-                new ApplicationCommandOptionChoiceProperties { Name = "TV", Value = "tv" }
+                new ApplicationCommandOptionChoiceProperties { Name = "TV", Value = "tv" },
+                new ApplicationCommandOptionChoiceProperties { Name = "Kids Movie", Value = "kids-movie" },
+                new ApplicationCommandOptionChoiceProperties { Name = "Kids TV", Value = "kids-tv" }
             ])
             .Build();
 
@@ -123,7 +137,7 @@ public sealed class DownloadBotService(
             .Build();
 
         var message = await command.FollowupAsync(embed: embed, components: componentBuilder.Build());
-        _pendingPicks[message.Id] = top;
+        _pendingPicks[message.Id] = new PendingPick(type, top);
     }
 
     private async Task OnSelectMenuExecutedAsync(SocketMessageComponent component)
@@ -131,19 +145,21 @@ public sealed class DownloadBotService(
         if (component.Data.CustomId != "download-pick")
             return;
 
-        if (!_pendingPicks.TryRemove(component.Message.Id, out var results))
+        if (!_pendingPicks.TryRemove(component.Message.Id, out var pick))
         {
             await component.UpdateAsync(m => m.Content = "This selection has expired.");
             return;
         }
 
         var index = int.Parse(component.Data.Values.First());
-        var picked = results[index];
+        var picked = pick.Results[index];
+        var marker = CategoryMarkers.GetValueOrDefault(pick.Type, "");
+        var taggedTitle = string.IsNullOrEmpty(marker) ? picked.Title : $"{marker} {picked.Title}";
 
         queue.Add(new PendingItem
         {
             Id = Guid.NewGuid().ToString(),
-            Title = picked.Title,
+            Title = taggedTitle,
             Link = picked.MagnetOrTorrentLink
         });
 
