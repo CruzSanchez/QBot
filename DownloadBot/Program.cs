@@ -3,6 +3,7 @@ using DownloadBot.Discord;
 using DownloadBot.Feed;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
+using Microsoft.Extensions.Logging;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -50,7 +51,10 @@ try
 
     // Drop feed items qBittorrent hasn't polled within 10 minutes so stale entries don't re-match forever.
     var queue = app.Services.GetRequiredService<PendingItemQueue>();
-    var expiryTimer = new Timer(_ => queue.RemoveExpired(TimeSpan.FromMinutes(10)), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+    var expiryLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    var expiryTimer = new Timer(_ => queue.RemoveExpiredAsync(TimeSpan.FromMinutes(10))
+        .ContinueWith(t => expiryLogger.LogError(t.Exception, "Feed expiry check failed"), TaskContinuationOptions.OnlyOnFaulted),
+        null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
 
     app.Run();
 }
