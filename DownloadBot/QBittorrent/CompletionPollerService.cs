@@ -46,6 +46,7 @@ public sealed class CompletionPollerService(
 
         if (state.IsError)
         {
+            logger.LogWarning("Detected failure for \"{Title}\" (hash {Hash}): state={State}", download.Title, download.InfoHash, state.State);
             tracking.Untrack(download.InfoHash);
             await AnnounceAsync(download, $"⚠️ **{download.Title}** failed in qBittorrent (state: `{state.State}`) — check the tracker/source or remove and re-search it.");
             return;
@@ -53,6 +54,9 @@ public sealed class CompletionPollerService(
 
         if (!state.IsComplete)
             return;
+
+        logger.LogInformation("Detected completion of \"{Title}\" (hash {Hash}): state={State} progress={Progress}",
+            download.Title, download.InfoHash, state.State, state.Progress);
 
         tracking.Untrack(download.InfoHash);
 
@@ -79,5 +83,6 @@ public sealed class CompletionPollerService(
         }
 
         await channel.SendMessageAsync($"<@{download.UserId}> {message}");
+        logger.LogInformation("Announced \"{Title}\" to channel {ChannelId}", download.Title, download.ChannelId);
     }
 }
