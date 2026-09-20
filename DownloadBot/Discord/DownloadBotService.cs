@@ -59,27 +59,42 @@ public sealed class DownloadBotService(
         return Task.CompletedTask;
     }
 
+    private static readonly ApplicationCommandOptionChoiceProperties[] TypeChoices =
+    [
+        new ApplicationCommandOptionChoiceProperties { Name = "Movie", Value = "movie" },
+        new ApplicationCommandOptionChoiceProperties { Name = "TV", Value = "tv" },
+        new ApplicationCommandOptionChoiceProperties { Name = "Kids Movie", Value = "kids-movie" },
+        new ApplicationCommandOptionChoiceProperties { Name = "Kids TV", Value = "kids-tv" }
+    ];
+
     private async Task OnReadyAsync()
     {
-        var command = new SlashCommandBuilder()
+        var downloadCommand = new SlashCommandBuilder()
             .WithName("download")
             .WithDescription("Search indexers and queue a download")
             .AddOption("title", ApplicationCommandOptionType.String, "Title to search for", isRequired: true)
-            .AddOption("type", ApplicationCommandOptionType.String, "Content type", isRequired: true, choices:
-            [
-                new ApplicationCommandOptionChoiceProperties { Name = "Movie", Value = "movie" },
-                new ApplicationCommandOptionChoiceProperties { Name = "TV", Value = "tv" },
-                new ApplicationCommandOptionChoiceProperties { Name = "Kids Movie", Value = "kids-movie" },
-                new ApplicationCommandOptionChoiceProperties { Name = "Kids TV", Value = "kids-tv" }
-            ])
+            .AddOption("type", ApplicationCommandOptionType.String, "Content type", isRequired: true, choices: TypeChoices)
+            .Build();
+
+        var downloadManyCommand = new SlashCommandBuilder()
+            .WithName("download-many")
+            .WithDescription("Queue several titles at once (auto-picks the top-seeded result for each)")
+            .AddOption("titles", ApplicationCommandOptionType.String, "Titles separated by commas", isRequired: true)
+            .AddOption("type", ApplicationCommandOptionType.String, "Content type applied to all titles", isRequired: true, choices: TypeChoices)
             .Build();
 
         try
         {
             if (options.Value.DevGuildId is { } guildId)
-                await client.Rest.CreateGuildCommand(command, guildId);
+            {
+                await client.Rest.CreateGuildCommand(downloadCommand, guildId);
+                await client.Rest.CreateGuildCommand(downloadManyCommand, guildId);
+            }
             else
-                await client.Rest.CreateGlobalCommand(command);
+            {
+                await client.Rest.CreateGlobalCommand(downloadCommand);
+                await client.Rest.CreateGlobalCommand(downloadManyCommand);
+            }
         }
         catch (Exception ex)
         {
@@ -89,9 +104,19 @@ public sealed class DownloadBotService(
 
     private async Task OnSlashCommandExecutedAsync(SocketSlashCommand command)
     {
-        if (command.Data.Name != "download")
-            return;
+        switch (command.Data.Name)
+        {
+            case "download":
+                await HandleDownloadAsync(command);
+                break;
+            case "download-many":
+                await HandleDownloadManyAsync(command);
+                break;
+        }
+    }
 
+    private async Task HandleDownloadAsync(SocketSlashCommand command)
+    {
         var title = (string)command.Data.Options.First(o => o.Name == "title").Value;
         var type = (string)command.Data.Options.First(o => o.Name == "type").Value;
 
@@ -153,7 +178,79 @@ public sealed class DownloadBotService(
 
         var index = int.Parse(component.Data.Values.First());
         var picked = pick.Results[index];
-        var marker = CategoryMarkers.GetValueOrDefault(pick.Type, "");
+        QueuePicked(picked, pick.Type, component.Channel.Id, component.User.Id);
+
+        await component.UpdateAsync(m =>
+        {
+            m.Content = $"Queued **{picked.Title}** — it will appear in the RSS feed for qBittorrent to pick up.";
+            m.Embed = null;
+            m.Components = new ComponentBuilder().Build();
+        });
+    }
+
+    private async Task HandleDownloadManyAsync(SocketSlashCommand command)
+    {
+        var titlesRaw = (string)command.Data.Options.First(o => o.Name == "titles").Value;
+        var type = (string)command.Data.Options.First(o => o.Name == "type").Value;
+
+        var titles = titlesRaw
+            .Split([',', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20) // guard against pasting an enormous list into one command
+            .ToList();
+
+        if (titles.Count == 0)
+        {
+            await command.RespondAsync("No titles found — separate them with commas or newlines.");
+            return;
+        }
+
+        await command.DeferAsync();
+
+        var queued = new List<string>();
+        var notFound = new List<string>();
+        var failed = new List<string>();
+
+        foreach (var title in titles)
+        {
+            IReadOnlyList<SearchResult> results;
+            try
+            {
+                results = await jackett.SearchAsync(title);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Jackett search failed for query {Query}", title);
+                failed.Add(title);
+                continue;
+            }
+
+            // No interactive picker here — with many titles in one command, auto-take the top-seeded result.
+            var best = results.FirstOrDefault();
+            if (best is null)
+            {
+                notFound.Add(title);
+                continue;
+            }
+
+            QueuePicked(best, type, command.Channel.Id, command.User.Id);
+            queued.Add($"{title} → {best.Title}");
+        }
+
+        var summary = new EmbedBuilder().WithTitle($"Queued {queued.Count}/{titles.Count} titles ({type})");
+        if (queued.Count > 0)
+            summary.AddField("Queued", string.Join('\n', queued.Select(q => $"✅ {q}")).Truncate(1024));
+        if (notFound.Count > 0)
+            summary.AddField("No results", string.Join('\n', notFound.Select(t => $"❌ {t}")).Truncate(1024));
+        if (failed.Count > 0)
+            summary.AddField("Search failed", string.Join('\n', failed.Select(t => $"⚠️ {t}")).Truncate(1024));
+
+        await command.FollowupAsync(embed: summary.Build());
+    }
+
+    private void QueuePicked(SearchResult picked, string type, ulong channelId, ulong userId)
+    {
+        var marker = CategoryMarkers.GetValueOrDefault(type, "");
         var taggedTitle = string.IsNullOrEmpty(marker) ? picked.Title : $"{marker} {picked.Title}";
 
         queue.Add(new PendingItem
@@ -166,21 +263,20 @@ public sealed class DownloadBotService(
         var infoHash = MagnetHash.TryExtract(picked.MagnetOrTorrentLink);
         if (infoHash is not null)
         {
-            tracking.Track(new TrackedDownload(infoHash, picked.Title, component.Channel.Id, component.User.Id));
+            tracking.Track(new TrackedDownload(infoHash, picked.Title, channelId, userId));
         }
         else
         {
             logger.LogInformation("No magnet hash found for {Title}; completion notification will not be tracked", picked.Title);
         }
-
-        await component.UpdateAsync(m =>
-        {
-            m.Content = $"Queued **{picked.Title}** — it will appear in the RSS feed for qBittorrent to pick up.";
-            m.Embed = null;
-            m.Components = new ComponentBuilder().Build();
-        });
     }
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..maxLength];
+}
+
+file static class StringExtensions
+{
+    public static string Truncate(this string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..(maxLength - 3)] + "...";
 }
