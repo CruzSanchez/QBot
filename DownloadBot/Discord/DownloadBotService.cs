@@ -46,6 +46,7 @@ public sealed class DownloadBotService(
     {
         client.Log += LogAsync;
         client.Ready += OnReadyAsync;
+        client.Disconnected += OnDisconnectedAsync;
         client.SlashCommandExecuted += OnSlashCommandExecutedAsync;
         client.SelectMenuExecuted += OnSelectMenuExecutedAsync;
         client.ButtonExecuted += OnButtonExecutedAsync;
@@ -60,7 +61,57 @@ public sealed class DownloadBotService(
         await client.LoginAsync(TokenType.Bot, token);
         await client.StartAsync();
 
+        _ = HeartbeatLoopAsync(stoppingToken);
+
         await Task.Delay(Timeout.Infinite, stoppingToken).ContinueWith(_ => { }, TaskScheduler.Default);
+    }
+
+    private Task OnDisconnectedAsync(Exception ex)
+    {
+        logger.LogWarning(ex, "Discord gateway disconnected");
+        return PostStatusAsync($"🔴 Bot disconnected: {ex.Message}");
+    }
+
+    private async Task HeartbeatLoopAsync(CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(30));
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            await PostStatusAsync($"Bot Status: LIVE - {FormatCentral(DateTimeOffset.UtcNow)}");
+        }
+    }
+
+    private static readonly TimeZoneInfo CentralTimeZone = ResolveCentralTimeZone();
+
+    private static TimeZoneInfo ResolveCentralTimeZone()
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById("Central Standard Time"); }
+        catch { return TimeZoneInfo.FindSystemTimeZoneById("America/Chicago"); }
+    }
+
+    private static string FormatCentral(DateTimeOffset utc) =>
+        $"{TimeZoneInfo.ConvertTime(utc, CentralTimeZone):yyyy-MM-dd HH:mm:ss} CST";
+
+    private async Task PostStatusAsync(string message)
+    {
+        var channelId = options.Value.StatusChannelId;
+        if (channelId is null)
+            return;
+
+        try
+        {
+            if (client.GetChannel(channelId.Value) is not IMessageChannel channel)
+            {
+                logger.LogWarning("Could not resolve status channel {ChannelId}", channelId);
+                return;
+            }
+
+            await channel.SendMessageAsync(message);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to post status message to channel {ChannelId}", channelId);
+        }
     }
 
     private Task LogAsync(LogMessage message)
@@ -117,6 +168,8 @@ public sealed class DownloadBotService(
         {
             logger.LogError(ex, "Failed to register slash command");
         }
+
+        await PostStatusAsync($"🟢 Bot connected - {FormatCentral(DateTimeOffset.UtcNow)}");
     }
 
     private async Task OnSlashCommandExecutedAsync(SocketSlashCommand command)
