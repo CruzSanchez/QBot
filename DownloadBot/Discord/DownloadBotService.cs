@@ -144,7 +144,7 @@ public sealed class DownloadBotService(
             .Build();
 
         var helpCommand = new SlashCommandBuilder()
-            .WithName("download-help")
+            .WithName("qbot-help")
             .WithDescription("Show how to use the download commands")
             .Build();
 
@@ -162,6 +162,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(downloadManyCommand, guildId);
                 await client.Rest.CreateGuildCommand(helpCommand, guildId);
                 await client.Rest.CreateGuildCommand(driveCheckCommand, guildId);
+                await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
             {
@@ -169,6 +170,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(downloadManyCommand);
                 await client.Rest.CreateGlobalCommand(helpCommand);
                 await client.Rest.CreateGlobalCommand(driveCheckCommand);
+                await RemoveRetiredGlobalCommandsAsync();
             }
         }
         catch (Exception ex)
@@ -177,6 +179,31 @@ public sealed class DownloadBotService(
         }
 
         await PostStatusAsync($"🟢 Bot connected - {FormatCentral(DateTimeOffset.UtcNow)}");
+    }
+
+    // Command names retired by renames — individual Create*Command calls never remove a stale command
+    // Discord still has registered under the old name, so it has to be deleted explicitly or it lingers
+    // forever as a dead duplicate.
+    private static readonly string[] RetiredCommandNames = ["download-help"];
+
+    private async Task RemoveRetiredGuildCommandsAsync(ulong guildId)
+    {
+        var existing = await client.Rest.GetGuildApplicationCommands(guildId);
+        foreach (var command in existing.Where(c => RetiredCommandNames.Contains(c.Name)))
+        {
+            await command.DeleteAsync();
+            logger.LogInformation("Removed retired guild slash command \"{Name}\"", command.Name);
+        }
+    }
+
+    private async Task RemoveRetiredGlobalCommandsAsync()
+    {
+        var existing = await client.Rest.GetGlobalApplicationCommands();
+        foreach (var command in existing.Where(c => RetiredCommandNames.Contains(c.Name)))
+        {
+            await command.DeleteAsync();
+            logger.LogInformation("Removed retired global slash command \"{Name}\"", command.Name);
+        }
     }
 
     private async Task OnSlashCommandExecutedAsync(SocketSlashCommand command)
@@ -189,7 +216,7 @@ public sealed class DownloadBotService(
             case "download-many":
                 await HandleDownloadManyAsync(command);
                 break;
-            case "download-help":
+            case "qbot-help":
                 await HandleHelpAsync(command);
                 break;
             case "drive-check":
