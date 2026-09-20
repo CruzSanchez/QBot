@@ -5,6 +5,7 @@ using DownloadBot.Feed;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -15,6 +16,7 @@ public sealed class DownloadBotService(
     IJackettClient jackett,
     PendingItemQueue queue,
     DownloadTrackingStore tracking,
+    IHttpClientFactory httpClientFactory,
     IOptions<DiscordOptions> options,
     ILogger<DownloadBotService> logger) : BackgroundService
 {
@@ -227,7 +229,7 @@ public sealed class DownloadBotService(
             var picked = pick.Results[index];
             logger.LogInformation("User {User} picked option {Index}: \"{Title}\"", component.User.Username, index, picked.Title);
 
-            QueuePicked(picked, pick.Type, component.Channel.Id, component.User.Id);
+            await QueuePickedAsync(picked, pick.Type, component.Channel.Id, component.User.Id);
 
             await component.UpdateAsync(m =>
             {
@@ -310,7 +312,7 @@ public sealed class DownloadBotService(
         }
     }
 
-    private void QueuePicked(SearchResult picked, string type, ulong channelId, ulong userId)
+    private async Task QueuePickedAsync(SearchResult picked, string type, ulong channelId, ulong userId)
     {
         var marker = CategoryMarkers.GetValueOrDefault(type, "");
         var taggedTitle = string.IsNullOrEmpty(marker) ? picked.Title : $"{marker} {picked.Title}";
@@ -323,14 +325,35 @@ public sealed class DownloadBotService(
         });
         logger.LogInformation("Queued \"{Title}\" for the RSS feed; queue now has {Count} item(s)", taggedTitle, queue.GetAll().Count);
 
-        var infoHash = MagnetHash.TryExtract(picked.MagnetOrTorrentLink);
+        var infoHash = await ResolveInfoHashAsync(picked.MagnetOrTorrentLink);
         if (infoHash is not null)
         {
             tracking.Track(new TrackedDownload(infoHash, picked.Title, channelId, userId));
         }
         else
         {
-            logger.LogInformation("No magnet hash found for {Title}; completion notification will not be tracked", picked.Title);
+            logger.LogInformation("Could not resolve an info hash for {Title}; completion notification will not be tracked", picked.Title);
+        }
+    }
+
+    private async Task<string?> ResolveInfoHashAsync(string link)
+    {
+        var magnetHash = MagnetHash.TryExtract(link);
+        if (magnetHash is not null)
+            return magnetHash;
+
+        // Not a magnet link — Jackett gave back a .torrent file URL instead, which doesn't carry the
+        // hash inline. Download it and compute the hash from its bencoded "info" dict.
+        try
+        {
+            using var httpClient = httpClientFactory.CreateClient();
+            var torrentBytes = await httpClient.GetByteArrayAsync(link);
+            return TorrentInfoHash.TryCompute(torrentBytes);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to download/parse .torrent file at {Link} to compute its info hash", link);
+            return null;
         }
     }
 
