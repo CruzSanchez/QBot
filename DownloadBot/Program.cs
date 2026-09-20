@@ -3,42 +3,58 @@ using DownloadBot.Discord;
 using DownloadBot.Feed;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
+using Serilog;
 
-var builder = WebApplication.CreateBuilder(args);
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .MinimumLevel.Override("System.Net.Http.HttpClient", Serilog.Events.LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .WriteTo.Console(outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+    .WriteTo.File(
+        "logs/downloadbot-.log",
+        rollingInterval: RollingInterval.Day,
+        outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
 
-builder.Logging.AddSimpleConsole(o =>
+try
 {
-    o.TimestampFormat = "HH:mm:ss.fff ";
-    o.SingleLine = true;
-});
+    var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.Configure<DiscordOptions>(builder.Configuration.GetSection("Discord"));
-builder.Services.Configure<JackettOptions>(builder.Configuration.GetSection("Jackett"));
-builder.Services.Configure<QBittorrentOptions>(builder.Configuration.GetSection("QBittorrent"));
+    builder.Host.UseSerilog();
 
-builder.Services.AddSingleton<PendingItemQueue>();
-builder.Services.AddSingleton<DownloadTrackingStore>();
-builder.Services.AddSingleton<DiscordSocketClient>();
-builder.Services.AddHttpClient<IJackettClient, JackettClient>();
+    builder.Services.Configure<DiscordOptions>(builder.Configuration.GetSection("Discord"));
+    builder.Services.Configure<JackettOptions>(builder.Configuration.GetSection("Jackett"));
+    builder.Services.Configure<QBittorrentOptions>(builder.Configuration.GetSection("QBittorrent"));
 
-// qBittorrent auth uses a session cookie set by /api/v2/auth/login, so the HttpClient must persist cookies across calls.
-builder.Services.AddHttpClient<IQBitApiClient, QBitApiClient>()
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    {
-        CookieContainer = new System.Net.CookieContainer(),
-        UseCookies = true
-    });
+    builder.Services.AddSingleton<PendingItemQueue>();
+    builder.Services.AddSingleton<DownloadTrackingStore>();
+    builder.Services.AddSingleton<DiscordSocketClient>();
+    builder.Services.AddHttpClient<IJackettClient, JackettClient>();
 
-builder.Services.AddHostedService<DownloadBotService>();
-builder.Services.AddHostedService<CompletionPollerService>();
+    // qBittorrent auth uses a session cookie set by /api/v2/auth/login, so the HttpClient must persist cookies across calls.
+    builder.Services.AddHttpClient<IQBitApiClient, QBitApiClient>()
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        {
+            CookieContainer = new System.Net.CookieContainer(),
+            UseCookies = true
+        });
 
-var app = builder.Build();
+    builder.Services.AddHostedService<DownloadBotService>();
+    builder.Services.AddHostedService<CompletionPollerService>();
 
-app.MapGet("/", () => "DownloadBot is running.");
-app.MapFeedEndpoint();
+    var app = builder.Build();
 
-// Drop feed items qBittorrent hasn't polled within 10 minutes so stale entries don't re-match forever.
-var queue = app.Services.GetRequiredService<PendingItemQueue>();
-var expiryTimer = new Timer(_ => queue.RemoveExpired(TimeSpan.FromMinutes(10)), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+    app.MapGet("/", () => "DownloadBot is running.");
+    app.MapFeedEndpoint();
 
-app.Run();
+    // Drop feed items qBittorrent hasn't polled within 10 minutes so stale entries don't re-match forever.
+    var queue = app.Services.GetRequiredService<PendingItemQueue>();
+    var expiryTimer = new Timer(_ => queue.RemoveExpired(TimeSpan.FromMinutes(10)), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+
+    app.Run();
+}
+finally
+{
+    Log.CloseAndFlush();
+}
