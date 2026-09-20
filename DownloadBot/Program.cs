@@ -30,6 +30,7 @@ try
     builder.Services.AddSingleton<DownloadTrackingStore>();
     builder.Services.AddSingleton<DiscordSocketClient>();
     builder.Services.AddSingleton<IPlexLibraryScanner, PlexLibraryScanner>();
+    builder.Services.AddSingleton<IDriveSpaceChecker, DriveSpaceChecker>();
     builder.Services.AddHttpClient<IJackettClient, JackettClient>();
 
     // qBittorrent auth uses a session cookie set by /api/v2/auth/login, so the HttpClient must persist cookies across calls.

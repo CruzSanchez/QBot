@@ -16,6 +16,7 @@ public sealed class DownloadBotService(
     IQBitApiClient qbit,
     DownloadTrackingStore tracking,
     IPlexLibraryScanner libraryScanner,
+    IDriveSpaceChecker driveSpaceChecker,
     IOptions<DiscordOptions> options,
     IOptions<QBittorrentOptions> qbitOptions,
     ILogger<DownloadBotService> logger) : BackgroundService
@@ -147,6 +148,12 @@ public sealed class DownloadBotService(
             .WithDescription("Show how to use the download commands")
             .Build();
 
+        var driveCheckCommand = new SlashCommandBuilder()
+            .WithName("drive-check")
+            .WithDescription("Show free space on attached drives (excludes C:)")
+            .AddOption("drive", ApplicationCommandOptionType.String, "Optional: check only this drive letter (e.g. G)", isRequired: false)
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -154,12 +161,14 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(downloadCommand, guildId);
                 await client.Rest.CreateGuildCommand(downloadManyCommand, guildId);
                 await client.Rest.CreateGuildCommand(helpCommand, guildId);
+                await client.Rest.CreateGuildCommand(driveCheckCommand, guildId);
             }
             else
             {
                 await client.Rest.CreateGlobalCommand(downloadCommand);
                 await client.Rest.CreateGlobalCommand(downloadManyCommand);
                 await client.Rest.CreateGlobalCommand(helpCommand);
+                await client.Rest.CreateGlobalCommand(driveCheckCommand);
             }
         }
         catch (Exception ex)
@@ -183,7 +192,44 @@ public sealed class DownloadBotService(
             case "download-help":
                 await HandleHelpAsync(command);
                 break;
+            case "drive-check":
+                await HandleDriveCheckAsync(command);
+                break;
         }
+    }
+
+    private Task HandleDriveCheckAsync(SocketSlashCommand command)
+    {
+        var driveOption = command.Data.Options.FirstOrDefault(o => o.Name == "drive")?.Value as string;
+
+        IReadOnlyList<DriveSpace> results;
+        try
+        {
+            results = driveSpaceChecker.GetFreeSpace(driveOption);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to check drive space");
+            return command.RespondAsync($"Failed to check drive space: {ex.Message}", ephemeral: true);
+        }
+
+        if (results.Count == 0)
+        {
+            var message = driveOption is null
+                ? "No attached drives found (other than C:)."
+                : $"Drive **{DriveSpaceChecker.NormalizeDriveName(driveOption)}** not found or not ready.";
+            return command.RespondAsync(message, ephemeral: true);
+        }
+
+        logger.LogInformation("/drive-check invoked by {User}: drive={Drive} -> {Count} result(s)",
+            command.User.Username, driveOption ?? "(all)", results.Count);
+
+        var embed = new EmbedBuilder()
+            .WithTitle("Drive space")
+            .WithDescription(string.Join('\n', results.Select(d => $"**{d.Name}** — {d.FreeGb:F2} GB free of {d.TotalGb:F2} GB")))
+            .Build();
+
+        return command.RespondAsync(embed: embed);
     }
 
     private static Task HandleHelpAsync(SocketSlashCommand command)
@@ -203,6 +249,9 @@ public sealed class DownloadBotService(
             .AddField("Already-in-library check",
                 "Before searching, the bot checks the Plex library folders for a matching title/year. " +
                 "If found, it asks you to confirm before searching anyway instead of blocking you outright.")
+            .AddField("/drive-check drive",
+                "Shows free space on every attached drive except C:. Pass `drive` (e.g. `G`) to check just one.\n" +
+                "Example: `/drive-check` or `/drive-check drive:G`")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. You'll get pinged in this server once it finishes downloading.")
