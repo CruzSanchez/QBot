@@ -19,6 +19,14 @@ public sealed record TorrentState(string Hash, string Name, string State, double
         };
 
     public bool IsComplete => Progress >= 1.0 || CompletedStates.Contains(State);
+
+    // qBittorrent states meaning the download itself failed — a bad tracker, missing/removed source
+    // files, etc. This is distinct from IsComplete: something the user should be alerted about instead
+    // of silently waiting on forever.
+    private static readonly HashSet<string> ErrorStates =
+        new(StringComparer.OrdinalIgnoreCase) { "error", "missingFiles" };
+
+    public bool IsError => ErrorStates.Contains(State);
 }
 
 public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOptions> options) : IQBitApiClient

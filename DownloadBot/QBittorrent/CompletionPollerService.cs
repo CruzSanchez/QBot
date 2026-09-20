@@ -41,17 +41,31 @@ public sealed class CompletionPollerService(
             return;
         }
 
-        if (state is null || !state.IsComplete)
+        if (state is null)
             return;
 
-        tracking.Untrack(download.InfoHash);
-
-        if (discord.GetChannel(download.ChannelId) is not IMessageChannel channel)
+        if (state.IsError)
         {
-            logger.LogWarning("Could not resolve Discord channel {ChannelId} to announce completion of {Title}", download.ChannelId, download.Title);
+            tracking.Untrack(download.InfoHash);
+            await AnnounceAsync(download, $"⚠️ **{download.Title}** failed in qBittorrent (state: `{state.State}`) — check the tracker/source or remove and re-search it.");
             return;
         }
 
-        await channel.SendMessageAsync($"<@{download.UserId}> **{download.Title}** finished downloading.");
+        if (!state.IsComplete)
+            return;
+
+        tracking.Untrack(download.InfoHash);
+        await AnnounceAsync(download, $"**{download.Title}** finished downloading.");
+    }
+
+    private async Task AnnounceAsync(TrackedDownload download, string message)
+    {
+        if (discord.GetChannel(download.ChannelId) is not IMessageChannel channel)
+        {
+            logger.LogWarning("Could not resolve Discord channel {ChannelId} to announce {Title}", download.ChannelId, download.Title);
+            return;
+        }
+
+        await channel.SendMessageAsync($"<@{download.UserId}> {message}");
     }
 }

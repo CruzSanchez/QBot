@@ -1,6 +1,7 @@
 using global::Discord.WebSocket;
 using DownloadBot.Discord;
 using DownloadBot.Feed;
+using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,7 @@ try
     builder.Services.AddSingleton<PendingItemQueue>();
     builder.Services.AddSingleton<DownloadTrackingStore>();
     builder.Services.AddSingleton<DiscordSocketClient>();
+    builder.Services.AddSingleton<IPlexLibraryScanner, PlexLibraryScanner>();
     builder.Services.AddHttpClient<IJackettClient, JackettClient>();
 
     // qBittorrent auth uses a session cookie set by /api/v2/auth/login, so the HttpClient must persist cookies across calls.

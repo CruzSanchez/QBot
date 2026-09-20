@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using global::Discord;
 using global::Discord.WebSocket;
 using DownloadBot.Feed;
+using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
 using Microsoft.Extensions.Hosting;
@@ -16,6 +17,7 @@ public sealed class DownloadBotService(
     IJackettClient jackett,
     PendingItemQueue queue,
     DownloadTrackingStore tracking,
+    IPlexLibraryScanner libraryScanner,
     IHttpClientFactory httpClientFactory,
     IOptions<DiscordOptions> options,
     ILogger<DownloadBotService> logger) : BackgroundService
@@ -23,7 +25,12 @@ public sealed class DownloadBotService(
     // Search results for an in-flight picker, keyed by the picker message's id.
     private readonly ConcurrentDictionary<ulong, PendingPick> _pendingPicks = new();
 
+    // "Already in the library, search anyway?" confirmations, keyed by that message's id.
+    private readonly ConcurrentDictionary<ulong, PendingDuplicateConfirmation> _pendingDuplicateConfirmations = new();
+
     private sealed record PendingPick(string Type, IReadOnlyList<SearchResult> Results);
+
+    private sealed record PendingDuplicateConfirmation(SocketSlashCommand Command, string Title, string Type);
 
     // Prefixed onto the RSS item title so qBittorrent's Auto Downloading Rules can match by plain string
     // instead of guessing content type from often-inconsistent torrent titles.
@@ -41,6 +48,7 @@ public sealed class DownloadBotService(
         client.Ready += OnReadyAsync;
         client.SlashCommandExecuted += OnSlashCommandExecutedAsync;
         client.SelectMenuExecuted += OnSelectMenuExecutedAsync;
+        client.ButtonExecuted += OnButtonExecutedAsync;
 
         var token = options.Value.Token;
         if (string.IsNullOrWhiteSpace(token))
@@ -141,6 +149,9 @@ public sealed class DownloadBotService(
                 "You get a separate picker for each title, so you still choose the exact release for every one.\n" +
                 "Example: `/download-many titles:Bluey, Paw Patrol type:kids-tv`\n" +
                 "Limit: 20 titles per command.")
+            .AddField("Already-in-library check",
+                "Before searching, the bot checks the Plex library folders for a matching title/year. " +
+                "If found, it asks you to confirm before searching anyway instead of blocking you outright.")
             .AddField("What happens after you pick",
                 "The chosen release is added to the download queue and shows up in qBittorrent automatically " +
                 "within a few minutes. You'll get pinged in this server once it finishes downloading.")
@@ -159,6 +170,14 @@ public sealed class DownloadBotService(
 
         await command.DeferAsync();
 
+        if (await PostDuplicateConfirmationIfFoundAsync(command, title, type))
+            return;
+
+        await SearchAndPostPickerAsync(command, title, type);
+    }
+
+    private async Task SearchAndPostPickerAsync(SocketSlashCommand command, string title, string type)
+    {
         IReadOnlyList<SearchResult> results;
         try
         {
@@ -180,6 +199,83 @@ public sealed class DownloadBotService(
         }
 
         await PostPickerAsync(command, title, type, results);
+    }
+
+    // Checks the local Plex library for an existing match before spending a Jackett search on it.
+    // Returns true (and posts a "search anyway?" confirmation instead) if something was found — this
+    // is a soft warning, not a hard stop, since a duplicate title/year could still be a different cut,
+    // a damaged/incomplete copy, etc.
+    private async Task<bool> PostDuplicateConfirmationIfFoundAsync(SocketSlashCommand command, string title, string type)
+    {
+        IReadOnlyList<string> matches;
+        try
+        {
+            matches = await libraryScanner.FindExistingAsync(title);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Library duplicate check failed for \"{Title}\"; proceeding with search anyway", title);
+            return false;
+        }
+
+        if (matches.Count == 0)
+            return false;
+
+        logger.LogInformation("Found {Count} existing match(es) for \"{Title}\" already in the library", matches.Count, title);
+
+        var embed = new EmbedBuilder()
+            .WithTitle($"Already in the library: \"{title}\"")
+            .WithDescription("A search resolved these item(s) already in the server:\n" +
+                string.Join('\n', matches.Select(m => $"📁 `{m}`")).Truncate(3800))
+            .WithFooter("Do you still want to search and download it anyway?")
+            .Build();
+
+        var buttons = new ComponentBuilder()
+            .WithButton("Search anyway", "dup-confirm-yes", ButtonStyle.Primary)
+            .WithButton("Cancel", "dup-confirm-no", ButtonStyle.Secondary);
+
+        var message = await command.FollowupAsync(embed: embed, components: buttons.Build());
+        _pendingDuplicateConfirmations[message.Id] = new PendingDuplicateConfirmation(command, title, type);
+        return true;
+    }
+
+    private async Task OnButtonExecutedAsync(SocketMessageComponent component)
+    {
+        if (component.Data.CustomId is not ("dup-confirm-yes" or "dup-confirm-no"))
+            return;
+
+        try
+        {
+            if (!_pendingDuplicateConfirmations.TryRemove(component.Message.Id, out var pending))
+            {
+                await component.UpdateAsync(m => m.Content = "This confirmation has expired.");
+                return;
+            }
+
+            if (component.Data.CustomId == "dup-confirm-no")
+            {
+                await component.UpdateAsync(m =>
+                {
+                    m.Content = $"Skipped searching for **{pending.Title}** — already in the library.";
+                    m.Embed = null;
+                    m.Components = new ComponentBuilder().Build();
+                });
+                return;
+            }
+
+            await component.UpdateAsync(m =>
+            {
+                m.Content = $"Searching anyway for **{pending.Title}**...";
+                m.Embed = null;
+                m.Components = new ComponentBuilder().Build();
+            });
+
+            await SearchAndPostPickerAsync(pending.Command, pending.Title, pending.Type);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to handle duplicate confirmation on message {MessageId}", component.Message.Id);
+        }
     }
 
     private async Task PostPickerAsync(SocketSlashCommand command, string title, string type, IReadOnlyList<SearchResult> results)
@@ -273,10 +369,17 @@ public sealed class DownloadBotService(
 
         var notFound = new List<string>();
         var failed = new List<string>();
+        var needsConfirmation = new List<string>();
         var pickersPosted = 0;
 
         foreach (var title in titles)
         {
+            if (await PostDuplicateConfirmationIfFoundAsync(command, title, type))
+            {
+                needsConfirmation.Add(title);
+                continue;
+            }
+
             IReadOnlyList<SearchResult> results;
             try
             {
@@ -300,9 +403,11 @@ public sealed class DownloadBotService(
             pickersPosted++;
         }
 
-        if (notFound.Count > 0 || failed.Count > 0)
+        if (notFound.Count > 0 || failed.Count > 0 || needsConfirmation.Count > 0)
         {
             var summary = new EmbedBuilder().WithTitle($"Posted {pickersPosted} picker(s) — some titles need attention");
+            if (needsConfirmation.Count > 0)
+                summary.AddField("Already in library — confirm above", string.Join('\n', needsConfirmation.Select(t => $"📁 {t}")).Truncate(1024));
             if (notFound.Count > 0)
                 summary.AddField("No results", string.Join('\n', notFound.Select(t => $"❌ {t}")).Truncate(1024));
             if (failed.Count > 0)
@@ -316,16 +421,19 @@ public sealed class DownloadBotService(
     {
         var marker = CategoryMarkers.GetValueOrDefault(type, "");
         var taggedTitle = string.IsNullOrEmpty(marker) ? picked.Title : $"{marker} {picked.Title}";
+        var infoHash = await ResolveInfoHashAsync(picked.MagnetOrTorrentLink);
 
         queue.Add(new PendingItem
         {
             Id = Guid.NewGuid().ToString(),
             Title = taggedTitle,
-            Link = picked.MagnetOrTorrentLink
+            Link = picked.MagnetOrTorrentLink,
+            InfoHash = infoHash,
+            ChannelId = channelId,
+            UserId = userId
         });
         logger.LogInformation("Queued \"{Title}\" for the RSS feed; queue now has {Count} item(s)", taggedTitle, queue.GetAll().Count);
 
-        var infoHash = await ResolveInfoHashAsync(picked.MagnetOrTorrentLink);
         if (infoHash is not null)
         {
             tracking.Track(new TrackedDownload(infoHash, picked.Title, channelId, userId));
