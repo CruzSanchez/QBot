@@ -15,8 +15,11 @@ Discord /download → local library check ("already have this?") → Jackett sea
                                                                           ↓
                               CompletionPollerService watches qBittorrent's Web API
                                                                           ↓
-                                    posts "finished downloading" back to Discord
+                        posts "finished downloading" / stall / error alerts to Discord
 ```
+
+Tracking (`hash → {title, channel, user}`) persists to `data/tracked-downloads.json`
+so a bot restart doesn't lose the completion ping for anything already added.
 
 qBittorrent's RSS Reader / Auto Downloading Rules are **not used** — the bot adds
 torrents directly and gets an immediate, reliable success/failure signal instead of
@@ -85,16 +88,19 @@ DownloadBot/
 ├── LocalLibrary/
 │   ├── TitleYear.cs                  // parses "<title> <year>" from a query or folder name
 │   ├── LibraryFolderScanner.cs       // title/year matching core, testable against any path
-│   └── PlexLibraryScanner.cs         // walks \plex\<category> folders across real drives
+│   ├── PlexLibraryScanner.cs         // walks \plex\<category> folders across real drives
+│   └── DriveSpaceChecker.cs          // free space per attached drive, for /drive-check
 └── QBittorrent/
     ├── QBittorrentOptions.cs
     ├── QBitApiClient.cs              // session-cookie auth, add/stop/list/lookup torrents
-    ├── DownloadTrackingStore.cs      // hash → {title, channel, user} awaiting completion
+    ├── DownloadTrackingStore.cs      // hash → {title, channel, user}, persisted to data/tracked-downloads.json
+    ├── StallDetector.cs              // pure "no progress for too long" decision logic
+    ├── ActiveDownloadFormatter.cs    // speed/ETA formatting for /active-downloads
     ├── TorrentNameMatcher.cs         // fuzzy name matching when a hash isn't known upfront
     ├── MagnetHash.cs                 // pulls the btih hash out of a magnet URI
-    └── CompletionPollerService.cs    // polls qBittorrent, posts completion/error to Discord
+    └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, StallDetector, DownloadTrackingStore
 └── Integration/                      // live Jackett/qBittorrent/Discord checks, self-skipping
 ```

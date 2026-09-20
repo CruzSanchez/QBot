@@ -69,7 +69,11 @@ confirmation within ~10 seconds. Consequences:
   qBittorrent's add API before declaring it failed. If your qBittorrent instance
   is unusually slow to register a new torrent, this could still false-negative —
   say so if 10s isn't enough headroom and I'll raise it.
-- **No persistence** — completion tracking is in-memory (`ConcurrentDictionary`),
-  so a bot restart drops anything mid-download from being tracked for a completion
-  ping (the download itself is unaffected either way, since qBittorrent owns that
-  independently). Say the word if you want SQLite added.
+- **Completion tracking now persists** to `DownloadBot/data/tracked-downloads.json`
+  (gitignored, machine-local) — a bot restart no longer drops anything mid-download
+  from being tracked for a completion ping. JSON, not SQLite, per your preference
+  (zero extra setup: no package, no schema).
+- **Stall alert threshold**: `QBittorrent:StallAlertMinutes` (default 20) — if a
+  tracked download shows no forward progress for this long, you get pinged once
+  (dead tracker / no seeders). It only alerts once per stall episode; if progress
+  resumes and then stalls again later, it can alert again.

@@ -3,3 +3,4 @@ obj/
 *.user
 .vs/
 DownloadBot/logs/
+DownloadBot/data/
