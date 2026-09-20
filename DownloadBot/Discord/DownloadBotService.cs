@@ -580,6 +580,7 @@ public sealed class DownloadBotService(
 
             if (component.Data.CustomId == "space-confirm-no")
             {
+                logger.LogInformation("User {User} declined to add \"{Title}\" due to low free space", component.User.Username, pending.Picked.Title);
                 await component.UpdateAsync(m =>
                 {
                     m.Content = $"Skipped **{pending.Picked.Title}** — not enough free space.";
@@ -589,6 +590,7 @@ public sealed class DownloadBotService(
                 return;
             }
 
+            logger.LogInformation("User {User} chose to add \"{Title}\" anyway despite low free space", component.User.Username, pending.Picked.Title);
             await component.DeferAsync();
             await CompleteAddAsync(component, pending.Picked, pending.Type);
         }
@@ -610,6 +612,7 @@ public sealed class DownloadBotService(
 
             if (component.Data.CustomId == "cancel-confirm-no")
             {
+                logger.LogInformation("User {User} decided not to cancel \"{Title}\" after all", component.User.Username, chosen.Title);
                 await component.UpdateAsync(m =>
                 {
                     m.Content = $"Left **{chosen.Title}** as is.";
@@ -809,6 +812,7 @@ public sealed class DownloadBotService(
 
         var index = int.Parse(component.Data.Values.First());
         var chosen = mine[index];
+        logger.LogInformation("User {User} selected \"{Title}\" (hash {Hash}) to cancel", component.User.Username, chosen.Title, chosen.InfoHash);
 
         var buttons = new ComponentBuilder()
             .WithButton("Remove (keep files)", "cancel-confirm-remove", ButtonStyle.Primary)
