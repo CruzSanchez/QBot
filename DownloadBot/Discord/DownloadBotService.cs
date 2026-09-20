@@ -19,8 +19,14 @@ public sealed class DownloadBotService(
     IDriveSpaceChecker driveSpaceChecker,
     IOptions<DiscordOptions> options,
     IOptions<QBittorrentOptions> qbitOptions,
+    IHostApplicationLifetime appLifetime,
     ILogger<DownloadBotService> logger) : BackgroundService
 {
+    // Set once an intentional shutdown (Ctrl+C, service stop) begins, so the natural Disconnected
+    // event that follows doesn't also try — and fail — to post its own redundant message once the
+    // client/HttpClient are already mid-teardown.
+    private volatile bool _isShuttingDown;
+
     // Search results for an in-flight picker, keyed by the picker message's id.
     private readonly ConcurrentDictionary<ulong, PendingPick> _pendingPicks = new();
 
@@ -60,6 +66,23 @@ public sealed class DownloadBotService(
         await client.LoginAsync(TokenType.Bot, token);
         await client.StartAsync();
 
+        // ApplicationStopping fires before hosted services are stopped and the client is disposed —
+        // this is the last point where the bot is still fully connected, so it's the only reliable
+        // place to send a "going down" message. The host blocks shutdown on this callback (up to its
+        // shutdown timeout), which is exactly what's needed to let the send actually complete.
+        appLifetime.ApplicationStopping.Register(() =>
+        {
+            _isShuttingDown = true;
+            try
+            {
+                PostStatusAsync($"🔴 Bot shutting down - {FormatCentral(DateTimeOffset.UtcNow)}").GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to post shutdown status message");
+            }
+        });
+
         _ = HeartbeatLoopAsync(stoppingToken);
 
         await Task.Delay(Timeout.Infinite, stoppingToken).ContinueWith(_ => { }, TaskScheduler.Default);
@@ -68,6 +91,9 @@ public sealed class DownloadBotService(
     private Task OnDisconnectedAsync(Exception ex)
     {
         logger.LogWarning(ex, "Discord gateway disconnected");
+        if (_isShuttingDown)
+            return Task.CompletedTask;
+
         return PostStatusAsync($"🔴 Bot disconnected: {ex.Message}");
     }
 
