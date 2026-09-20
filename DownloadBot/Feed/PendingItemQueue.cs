@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using global::Discord;
 using global::Discord.WebSocket;
 using DownloadBot.QBittorrent;
@@ -6,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace DownloadBot.Feed;
 
-public sealed class PendingItemQueue(IQBitApiClient qbit, DiscordSocketClient discord, ILogger<PendingItemQueue> logger)
+public sealed partial class PendingItemQueue(IQBitApiClient qbit, DiscordSocketClient discord, ILogger<PendingItemQueue> logger)
 {
     private readonly ConcurrentDictionary<string, PendingItem> _items = new();
 
@@ -24,22 +25,7 @@ public sealed class PendingItemQueue(IQBitApiClient qbit, DiscordSocketClient di
             if (item.AddedAt >= cutoff || !_items.TryRemove(item.Id, out _))
                 continue;
 
-            // The queue has no direct signal that qBittorrent grabbed an item, only a timer — so before
-            // warning, check whether qBittorrent actually knows about it (it may have downloaded it fine).
-            var alreadyAdded = false;
-            if (item.InfoHash is not null)
-            {
-                try
-                {
-                    alreadyAdded = await qbit.GetTorrentStateAsync(item.InfoHash) is not null;
-                }
-                catch (Exception ex)
-                {
-                    logger.LogDebug(ex, "Could not check qBittorrent for \"{Title}\" while expiring it", item.Title);
-                }
-            }
-
-            if (alreadyAdded)
+            if (await WasAlreadyAddedAsync(item))
             {
                 logger.LogInformation("Removed \"{Title}\" from the feed after {Age} — qBittorrent already added it", item.Title, maxAge);
                 continue;
@@ -49,6 +35,56 @@ public sealed class PendingItemQueue(IQBitApiClient qbit, DiscordSocketClient di
             await AlertAsync(item, "never got picked up by qBittorrent — check that your Auto Downloading Rule matches its title marker, and that the link is still valid.");
         }
     }
+
+    // The queue has no direct push signal that qBittorrent grabbed an item, only a timer — so before
+    // warning, check whether qBittorrent actually knows about it (it may have downloaded it fine).
+    private async Task<bool> WasAlreadyAddedAsync(PendingItem item)
+    {
+        if (item.InfoHash is not null)
+        {
+            try
+            {
+                if (await qbit.GetTorrentStateAsync(item.InfoHash) is not null)
+                    return true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Could not check qBittorrent by hash for \"{Title}\" while expiring it", item.Title);
+            }
+        }
+
+        // No hash, or the hash lookup didn't confirm it either way (we compute the hash ourselves
+        // before qBittorrent ever sees the item, so a computation failure there says nothing about
+        // whether qBittorrent's own RSS Auto Downloading Rule still grabbed the raw feed link fine).
+        // Fall back to a fuzzy name match against qBittorrent's full torrent list.
+        try
+        {
+            var strippedTitle = StripMarker(item.Title);
+            var all = await qbit.GetAllTorrentsAsync();
+            return all.Any(t => NamesLooselyMatch(t.Name, strippedTitle));
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not check qBittorrent by name for \"{Title}\" while expiring it", item.Title);
+            return false;
+        }
+    }
+
+    private static string StripMarker(string title) => MarkerPrefixRegex().Replace(title, "");
+
+    private static bool NamesLooselyMatch(string qbitName, string ourTitle)
+    {
+        var a = AlphaNumericOnly(qbitName);
+        var b = AlphaNumericOnly(ourTitle);
+        return a.Length > 0 && b.Length > 0 &&
+               (a.Contains(b, StringComparison.OrdinalIgnoreCase) || b.Contains(a, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string AlphaNumericOnly(string value) =>
+        new([.. value.Where(char.IsLetterOrDigit)]);
+
+    [GeneratedRegex(@"^\[DLBOT-[A-Z-]+\]\s*")]
+    private static partial Regex MarkerPrefixRegex();
 
     private async Task AlertAsync(PendingItem item, string reason)
     {

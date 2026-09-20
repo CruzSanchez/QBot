@@ -7,6 +7,7 @@ namespace DownloadBot.QBittorrent;
 public interface IQBitApiClient
 {
     Task<TorrentState?> GetTorrentStateAsync(string infoHash, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<TorrentState>> GetAllTorrentsAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed record TorrentState(string Hash, string Name, string State, double Progress)
@@ -62,6 +63,37 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
             torrent.GetProperty("name").GetString() ?? "",
             torrent.GetProperty("state").GetString() ?? "",
             torrent.GetProperty("progress").GetDouble());
+    }
+
+    public async Task<IReadOnlyList<TorrentState>> GetAllTorrentsAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureLoggedInAsync(cancellationToken);
+
+        var opts = options.Value;
+        var url = $"{opts.BaseUrl.TrimEnd('/')}/api/v2/torrents/info";
+        var response = await httpClient.GetAsync(url, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            _loggedIn = false;
+            return [];
+        }
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(json);
+
+        var results = new List<TorrentState>();
+        foreach (var torrent in doc.RootElement.EnumerateArray())
+        {
+            results.Add(new TorrentState(
+                torrent.GetProperty("hash").GetString() ?? "",
+                torrent.GetProperty("name").GetString() ?? "",
+                torrent.GetProperty("state").GetString() ?? "",
+                torrent.GetProperty("progress").GetDouble()));
+        }
+
+        return results;
     }
 
     private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
