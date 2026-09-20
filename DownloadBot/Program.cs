@@ -41,6 +41,12 @@ try
             UseCookies = true
         });
 
+    // .torrent file redirects (e.g. through Jackett's /dl/ proxy) sometimes carry unencoded characters
+    // in the Location header that .NET's automatic redirect handling fails to parse, so this client
+    // follows redirects manually instead — see DownloadBotService.ResolveInfoHashAsync.
+    builder.Services.AddHttpClient("TorrentFileDownloader")
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+
     builder.Services.AddHostedService<DownloadBotService>();
     builder.Services.AddHostedService<CompletionPollerService>();
 

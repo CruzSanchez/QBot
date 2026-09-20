@@ -346,15 +346,66 @@ public sealed class DownloadBotService(
         // hash inline. Download it and compute the hash from its bencoded "info" dict.
         try
         {
-            using var httpClient = httpClientFactory.CreateClient();
-            var torrentBytes = await httpClient.GetByteArrayAsync(link);
-            return TorrentInfoHash.TryCompute(torrentBytes);
+            var torrentBytes = await DownloadFollowingRedirectsAsync(link);
+            return torrentBytes is not null ? TorrentInfoHash.TryCompute(torrentBytes) : null;
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to download/parse .torrent file at {Link} to compute its info hash", link);
             return null;
         }
+    }
+
+    // Some indexer redirects (e.g. Jackett's /dl/ proxy landing on the tracker's own file host) carry
+    // unencoded characters in the Location header that .NET's built-in redirect handling can't parse
+    // into a valid connection authority. Following manually lets us sanitize each hop's Location first.
+    private async Task<byte[]?> DownloadFollowingRedirectsAsync(string link)
+    {
+        var httpClient = httpClientFactory.CreateClient("TorrentFileDownloader");
+        var currentUri = new Uri(link);
+
+        for (var hop = 0; hop < 5; hop++)
+        {
+            using var response = await httpClient.GetAsync(currentUri, HttpCompletionOption.ResponseHeadersRead);
+
+            if (!IsRedirect(response.StatusCode))
+            {
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsByteArrayAsync();
+            }
+
+            var rawLocation = response.Headers.Location?.OriginalString;
+            if (string.IsNullOrEmpty(rawLocation))
+            {
+                logger.LogWarning("Redirect from {Uri} had no usable Location header", currentUri);
+                return null;
+            }
+
+            currentUri = ResolveRedirectUri(currentUri, rawLocation);
+        }
+
+        logger.LogWarning("Too many redirects while downloading {Link}", link);
+        return null;
+    }
+
+    private static bool IsRedirect(System.Net.HttpStatusCode status) =>
+        status is System.Net.HttpStatusCode.MovedPermanently
+            or System.Net.HttpStatusCode.Found
+            or System.Net.HttpStatusCode.SeeOther
+            or System.Net.HttpStatusCode.TemporaryRedirect
+            or System.Net.HttpStatusCode.PermanentRedirect;
+
+    private static Uri ResolveRedirectUri(Uri baseUri, string rawLocation)
+    {
+        // Raw spaces are the most common offender in the wild; encode them before attempting to parse.
+        var sanitized = rawLocation.Replace(" ", "%20");
+
+        if (Uri.TryCreate(sanitized, UriKind.Absolute, out var absolute))
+            return absolute;
+        if (Uri.TryCreate(baseUri, sanitized, out var combined))
+            return combined;
+
+        throw new UriFormatException($"Could not resolve redirect location \"{rawLocation}\" against {baseUri}");
     }
 
     private static string Truncate(string value, int maxLength) =>
