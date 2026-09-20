@@ -55,6 +55,18 @@ public sealed class CompletionPollerService(
             return;
 
         tracking.Untrack(download.InfoHash);
+
+        // Seed only as long as it took the bot to notice completion, then stop — the user only wants
+        // seeding for as long as the bot itself needs it, not indefinitely per qBittorrent's defaults.
+        try
+        {
+            await qbit.StopTorrentAsync(download.InfoHash, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to stop seeding \"{Title}\" after completion", download.Title);
+        }
+
         await AnnounceAsync(download, $"**{download.Title}** finished downloading.");
     }
 

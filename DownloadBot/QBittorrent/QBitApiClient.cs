@@ -9,6 +9,7 @@ public interface IQBitApiClient
     Task<TorrentState?> GetTorrentStateAsync(string infoHash, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TorrentState>> GetAllTorrentsAsync(CancellationToken cancellationToken = default);
     Task AddTorrentAsync(string urlOrMagnet, string savePath, CancellationToken cancellationToken = default);
+    Task StopTorrentAsync(string infoHash, CancellationToken cancellationToken = default);
 }
 
 public sealed record TorrentState(string Hash, string Name, string State, double Progress)
@@ -128,6 +129,39 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
         var body = (await response.Content.ReadAsStringAsync(cancellationToken)).Trim();
         if (!body.Equals("Ok.", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"qBittorrent rejected the add request: {body}");
+    }
+
+    // Stops seeding a completed torrent immediately once the bot has observed and reported completion —
+    // rather than relying on qBittorrent's own global/per-torrent seeding-limit settings (whose "then"
+    // action didn't clearly apply given this account's current config), the bot controls exactly how
+    // long its own downloads seed for: only as long as it took to detect completion. Files on disk are
+    // untouched — this pauses transfer, it does not remove the torrent or delete anything.
+    public async Task StopTorrentAsync(string infoHash, CancellationToken cancellationToken = default)
+    {
+        await EnsureLoggedInAsync(cancellationToken);
+
+        var hash = infoHash.ToLowerInvariant();
+
+        // qBittorrent 5.0 renamed "pause" to "stop"; older installs only have the /pause endpoint.
+        // Try the current name first and fall back so this works across versions.
+        var response = await PostHashAsync("stop", hash, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            response = await PostHashAsync("pause", hash, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            _loggedIn = false;
+            throw new InvalidOperationException("qBittorrent session expired while stopping a torrent");
+        }
+
+        response.EnsureSuccessStatusCode();
+    }
+
+    private async Task<HttpResponseMessage> PostHashAsync(string action, string hash, CancellationToken cancellationToken)
+    {
+        var opts = options.Value;
+        using var content = new FormUrlEncodedContent(new Dictionary<string, string> { ["hashes"] = hash });
+        return await httpClient.PostAsync($"{opts.BaseUrl.TrimEnd('/')}/api/v2/torrents/{action}", content, cancellationToken);
     }
 
     private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
