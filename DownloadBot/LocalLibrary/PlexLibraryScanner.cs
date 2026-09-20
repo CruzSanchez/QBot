@@ -8,7 +8,8 @@ public interface IPlexLibraryScanner
 }
 
 // Every drive except C: may have its own \plex\<category> library. Walks each one looking for a
-// folder whose name (title + optional year, same format as the /download query) matches.
+// folder OR a bare file (some libraries are flat, one file per movie with no per-title folder)
+// whose name (title + optional year, same format as the /download query) matches.
 public sealed class PlexLibraryScanner(ILogger<PlexLibraryScanner> logger) : IPlexLibraryScanner
 {
     private static readonly string[] CategoryFolders =
@@ -21,12 +22,19 @@ public sealed class PlexLibraryScanner(ILogger<PlexLibraryScanner> logger) : IPl
         {
             var (title, year) = TitleYear.Parse(rawQuery);
             var matches = new List<string>();
+            var drivesChecked = 0;
+            var categoriesChecked = 0;
 
             foreach (var drive in GetCandidateDrives())
             {
                 var plexRoot = Path.Combine(drive, "plex");
                 if (!Directory.Exists(plexRoot))
+                {
+                    logger.LogDebug("No plex folder at {Path}", plexRoot);
                     continue;
+                }
+
+                drivesChecked++;
 
                 foreach (var category in CategoryFolders)
                 {
@@ -34,9 +42,14 @@ public sealed class PlexLibraryScanner(ILogger<PlexLibraryScanner> logger) : IPl
                     if (!Directory.Exists(categoryPath))
                         continue;
 
+                    categoriesChecked++;
                     matches.AddRange(FindMatchesUnder(categoryPath, title, year));
                 }
             }
+
+            logger.LogInformation(
+                "Library check for \"{RawQuery}\" (parsed as \"{Title}\" {Year}): {DriveCount} drive(s), {CategoryCount} categor(y/ies) scanned, {MatchCount} match(es)",
+                rawQuery, title, year, drivesChecked, categoriesChecked, matches.Count);
 
             return matches;
         });
@@ -67,24 +80,40 @@ public sealed class PlexLibraryScanner(ILogger<PlexLibraryScanner> logger) : IPl
 
     private IEnumerable<string> FindMatchesUnder(string categoryPath, string title, int? year)
     {
-        string[] entries;
+        string[] directories;
+        string[] files;
         try
         {
-            entries = Directory.GetDirectories(categoryPath, "*", SearchOption.AllDirectories);
+            directories = Directory.GetDirectories(categoryPath, "*", SearchOption.AllDirectories);
+            files = Directory.GetFiles(categoryPath, "*", SearchOption.AllDirectories);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not scan {Path} for existing titles", categoryPath);
-            return [];
+            yield break;
         }
 
-        return entries.Where(dir =>
+        logger.LogDebug("Scanning {Path}: {DirCount} folder(s), {FileCount} file(s)", categoryPath, directories.Length, files.Length);
+
+        foreach (var dir in directories)
         {
-            var (candidateTitle, candidateYear) = TitleYear.Parse(Path.GetFileName(dir));
-            if (!string.Equals(candidateTitle, title, StringComparison.OrdinalIgnoreCase))
-                return false;
-            // Same title, different year (a remake/reboot) doesn't count as already having it.
-            return year is null || candidateYear is null || year == candidateYear;
-        });
+            if (NameMatches(Path.GetFileName(dir), title, year))
+                yield return dir;
+        }
+
+        foreach (var file in files)
+        {
+            if (NameMatches(Path.GetFileNameWithoutExtension(file), title, year))
+                yield return file;
+        }
+    }
+
+    private static bool NameMatches(string candidateName, string title, int? year)
+    {
+        var (candidateTitle, candidateYear) = TitleYear.Parse(candidateName);
+        if (!string.Equals(candidateTitle, title, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Same title, different year (a remake/reboot) doesn't count as already having it.
+        return year is null || candidateYear is null || year == candidateYear;
     }
 }
