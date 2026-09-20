@@ -44,7 +44,7 @@ public sealed class PlexLibraryScanner(ILogger<PlexLibraryScanner> logger) : IPl
 
                     categoriesChecked++;
                     var before = matches.Count;
-                    matches.AddRange(FindMatchesUnder(categoryPath, title, year));
+                    matches.AddRange(LibraryFolderScanner.FindMatches(categoryPath, title, year, logger));
                     logger.LogDebug("Scanned {Path}: {MatchCount} match(es)", categoryPath, matches.Count - before);
                 }
             }
@@ -83,81 +83,5 @@ public sealed class PlexLibraryScanner(ILogger<PlexLibraryScanner> logger) : IPl
 
             yield return drive.RootDirectory.FullName;
         }
-    }
-
-    // Directory.GetDirectories/.GetFiles with SearchOption.AllDirectories aborts the ENTIRE call if it
-    // hits even one inaccessible subfolder anywhere in the tree (permissions, a junction, a hidden
-    // system folder) — on a large library that would silently zero out every result for the whole
-    // category, not just the bad branch. Walking manually lets a single bad subfolder be skipped
-    // instead of losing the whole scan.
-    private IEnumerable<string> FindMatchesUnder(string categoryPath, string title, int? year)
-    {
-        foreach (var dir in EnumerateDirectoriesSafe(categoryPath))
-        {
-            if (NameMatches(Path.GetFileName(dir), title, year))
-                yield return dir;
-        }
-
-        foreach (var file in EnumerateFilesSafe(categoryPath))
-        {
-            if (NameMatches(Path.GetFileNameWithoutExtension(file), title, year))
-                yield return file;
-        }
-    }
-
-    private IEnumerable<string> EnumerateDirectoriesSafe(string root)
-    {
-        var stack = new Stack<string>();
-        stack.Push(root);
-
-        while (stack.Count > 0)
-        {
-            var current = stack.Pop();
-            string[] subdirs;
-            try
-            {
-                subdirs = Directory.GetDirectories(current);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Skipping inaccessible directory {Path}", current);
-                continue;
-            }
-
-            foreach (var subdir in subdirs)
-            {
-                yield return subdir;
-                stack.Push(subdir);
-            }
-        }
-    }
-
-    private IEnumerable<string> EnumerateFilesSafe(string root)
-    {
-        foreach (var dir in EnumerateDirectoriesSafe(root).Prepend(root))
-        {
-            string[] files;
-            try
-            {
-                files = Directory.GetFiles(dir);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Skipping inaccessible directory {Path} while listing files", dir);
-                continue;
-            }
-
-            foreach (var file in files)
-                yield return file;
-        }
-    }
-
-    private static bool NameMatches(string candidateName, string title, int? year)
-    {
-        var (candidateTitle, candidateYear) = TitleYear.Parse(candidateName);
-        if (!string.Equals(candidateTitle, title, StringComparison.OrdinalIgnoreCase))
-            return false;
-        // Same title, different year (a remake/reboot) doesn't count as already having it.
-        return year is null || candidateYear is null || year == candidateYear;
     }
 }

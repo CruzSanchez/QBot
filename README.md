@@ -41,6 +41,35 @@ dotnet run
 The app listens on `http://localhost:5151` (`/` is just a health check — there's no
 other public endpoint).
 
+## Running tests
+
+```bash
+dotnet test
+```
+
+`DownloadBot.Tests` has two kinds of tests:
+
+- **Unit tests** — pure logic (title/year parsing, magnet hash extraction, fuzzy
+  name matching, library folder scanning against a real temp directory). No
+  external services needed; these always run.
+- **Integration tests** — read-only checks against live Jackett, qBittorrent, and
+  Discord using whatever credentials are already set up (same `UserSecretsId` as
+  `DownloadBot`, so nothing to configure separately). These **skip themselves**
+  (not fail) when a service isn't reachable or configured, so `dotnet test` stays
+  quiet when the server's off and meaningful when it's on — exactly the "kick off
+  when I turn the server on" workflow.
+  - Jackett: runs a real search, asserts results come back.
+  - qBittorrent: logs in, lists torrents, looks up a hash that doesn't exist.
+  - Discord: logs in and waits for the gateway to reach Ready — it does **not**
+    wire up the bot's own event handlers, so it never registers commands or posts
+    to any channel.
+  - **Deliberately not tested**: adding a real torrent, and simulating an actual
+    slash-command/button interaction. The first would mean every test run adds
+    something to your real qBittorrent; the second isn't realistically possible —
+    Discord.Net's interaction objects are sealed types the gateway hands you, not
+    something you can construct or mock. If you want either covered anyway (e.g.
+    an opt-in add-a-known-safe-torrent test gated behind an env var), say so.
+
 ## Project layout
 
 ```
@@ -55,12 +84,17 @@ DownloadBot/
 │   └── JackettClient.cs              // Torznab query + result parsing
 ├── LocalLibrary/
 │   ├── TitleYear.cs                  // parses "<title> <year>" from a query or folder name
-│   └── PlexLibraryScanner.cs         // checks \plex\<category> folders across drives for an existing copy
+│   ├── LibraryFolderScanner.cs       // title/year matching core, testable against any path
+│   └── PlexLibraryScanner.cs         // walks \plex\<category> folders across real drives
 └── QBittorrent/
     ├── QBittorrentOptions.cs
-    ├── QBitApiClient.cs              // session-cookie auth, add/list/lookup torrents
+    ├── QBitApiClient.cs              // session-cookie auth, add/stop/list/lookup torrents
     ├── DownloadTrackingStore.cs      // hash → {title, channel, user} awaiting completion
     ├── TorrentNameMatcher.cs         // fuzzy name matching when a hash isn't known upfront
     ├── MagnetHash.cs                 // pulls the btih hash out of a magnet URI
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/error to Discord
+
+DownloadBot.Tests/
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner
+└── Integration/                      // live Jackett/qBittorrent/Discord checks, self-skipping
 ```
