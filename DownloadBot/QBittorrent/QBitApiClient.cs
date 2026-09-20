@@ -10,6 +10,7 @@ public interface IQBitApiClient
     Task<IReadOnlyList<TorrentState>> GetAllTorrentsAsync(CancellationToken cancellationToken = default);
     Task AddTorrentAsync(string urlOrMagnet, string savePath, CancellationToken cancellationToken = default);
     Task StopTorrentAsync(string infoHash, CancellationToken cancellationToken = default);
+    Task RemoveTorrentAsync(string infoHash, bool deleteFiles, CancellationToken cancellationToken = default);
 }
 
 public sealed record TorrentState(string Hash, string Name, string State, double Progress, long DownloadSpeedBytesPerSec = 0, long EtaSeconds = 0)
@@ -163,6 +164,30 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
         {
             _loggedIn = false;
             throw new InvalidOperationException("qBittorrent session expired while stopping a torrent");
+        }
+
+        response.EnsureSuccessStatusCode();
+    }
+
+    // Used by /cancel. deleteFiles=false just removes the torrent from qBittorrent's list, keeping
+    // whatever was already downloaded on disk; deleteFiles=true removes the partial/complete data too.
+    public async Task RemoveTorrentAsync(string infoHash, bool deleteFiles, CancellationToken cancellationToken = default)
+    {
+        await EnsureLoggedInAsync(cancellationToken);
+
+        var opts = options.Value;
+        using var content = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["hashes"] = infoHash.ToLowerInvariant(),
+            ["deleteFiles"] = deleteFiles ? "true" : "false"
+        });
+
+        var response = await httpClient.PostAsync($"{opts.BaseUrl.TrimEnd('/')}/api/v2/torrents/delete", content, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            _loggedIn = false;
+            throw new InvalidOperationException("qBittorrent session expired while removing a torrent");
         }
 
         response.EnsureSuccessStatusCode();

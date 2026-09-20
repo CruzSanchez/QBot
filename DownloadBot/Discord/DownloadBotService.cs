@@ -33,9 +33,20 @@ public sealed class DownloadBotService(
     // "Already in the library, search anyway?" confirmations, keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, PendingDuplicateConfirmation> _pendingDuplicateConfirmations = new();
 
+    // "Not enough free space, add anyway?" confirmations, keyed by that message's id.
+    private readonly ConcurrentDictionary<ulong, PendingSpaceConfirmation> _pendingSpaceConfirmations = new();
+
+    // /cancel's "which of your downloads?" picker options, keyed by that message's id.
+    private readonly ConcurrentDictionary<ulong, IReadOnlyList<TrackedDownload>> _pendingCancelPicks = new();
+
+    // /cancel's "remove, remove+delete, or nevermind?" confirmations, keyed by that message's id.
+    private readonly ConcurrentDictionary<ulong, TrackedDownload> _pendingCancelConfirmations = new();
+
     private sealed record PendingPick(string Type, IReadOnlyList<SearchResult> Results);
 
     private sealed record PendingDuplicateConfirmation(SocketSlashCommand Command, string Title, string Type);
+
+    private sealed record PendingSpaceConfirmation(SearchResult Picked, string Type);
 
     // Prefixed onto the RSS item title so qBittorrent's Auto Downloading Rules can match by plain string
     // instead of guessing content type from often-inconsistent torrent titles.
@@ -200,6 +211,11 @@ public sealed class DownloadBotService(
             .WithDescription("Show what qBittorrent is currently downloading")
             .Build();
 
+        var cancelCommand = new SlashCommandBuilder()
+            .WithName("cancel")
+            .WithDescription("Cancel one of your active downloads")
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -209,6 +225,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(helpCommand, guildId);
                 await client.Rest.CreateGuildCommand(driveCheckCommand, guildId);
                 await client.Rest.CreateGuildCommand(activeDownloadsCommand, guildId);
+                await client.Rest.CreateGuildCommand(cancelCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -218,6 +235,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(helpCommand);
                 await client.Rest.CreateGlobalCommand(driveCheckCommand);
                 await client.Rest.CreateGlobalCommand(activeDownloadsCommand);
+                await client.Rest.CreateGlobalCommand(cancelCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -273,7 +291,37 @@ public sealed class DownloadBotService(
             case "active-downloads":
                 await HandleActiveDownloadsAsync(command);
                 break;
+            case "cancel":
+                await HandleCancelAsync(command);
+                break;
         }
+    }
+
+    private async Task HandleCancelAsync(SocketSlashCommand command)
+    {
+        var mine = tracking.GetAll().Where(d => d.UserId == command.User.Id).ToList();
+
+        if (mine.Count == 0)
+        {
+            await command.RespondAsync("You have no active downloads to cancel.", ephemeral: true);
+            return;
+        }
+
+        await command.DeferAsync(ephemeral: true);
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId("cancel-pick")
+            .WithPlaceholder("Choose a download to cancel");
+
+        foreach (var (download, index) in mine.Select((d, i) => (d, i)))
+            menu.AddOption(Truncate(download.Title, 100), index.ToString());
+
+        var componentBuilder = new ComponentBuilder().WithSelectMenu(menu);
+
+        var message = await command.FollowupAsync("Which download do you want to cancel?", components: componentBuilder.Build(), ephemeral: true);
+        _pendingCancelPicks[message.Id] = mine;
+
+        logger.LogInformation("/cancel invoked by {User} -> {Count} active download(s) to choose from", command.User.Username, mine.Count);
     }
 
     private async Task HandleActiveDownloadsAsync(SocketSlashCommand command)
@@ -355,7 +403,7 @@ public sealed class DownloadBotService(
             .WithDescription("Search torrent indexers from Discord and queue a download for qBittorrent to pick up automatically.")
             .AddField("/download title type",
                 "Search for one title. Pick your `type` (Movie, TV, Kids Movie, Kids TV), " +
-                "then choose the exact release from the dropdown of top results.\n" +
+                "then choose the exact release from the dropdown of top results (or hit Cancel to back out).\n" +
                 "Example: `/download title:Dune Part Two type:movie`")
             .AddField("/download-many titles type",
                 "Search for several titles at once, separated by commas (or newlines). " +
@@ -370,9 +418,14 @@ public sealed class DownloadBotService(
                 "Example: `/drive-check` or `/drive-check drive:G`")
             .AddField("/active-downloads",
                 "Shows what qBittorrent is currently downloading, with progress, speed, and ETA for each.")
+            .AddField("/cancel",
+                "Cancel one of your own active downloads. Pick which one, then choose to remove it " +
+                "(keeping any partially-downloaded files) or remove and delete the files too.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
-                "whether it worked. You'll get pinged in this server once it finishes downloading.")
+                "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
+                "asked to confirm before it adds anyway. You'll get pinged in this server once it finishes " +
+                "downloading, if it stalls with no progress, or if it fails.")
             .WithFooter("Ask whoever runs the bot if a search comes back empty — it may need more indexers configured.")
             .Build();
 
@@ -457,11 +510,17 @@ public sealed class DownloadBotService(
         return true;
     }
 
-    private async Task OnButtonExecutedAsync(SocketMessageComponent component)
+    private Task OnButtonExecutedAsync(SocketMessageComponent component) => component.Data.CustomId switch
     {
-        if (component.Data.CustomId is not ("dup-confirm-yes" or "dup-confirm-no"))
-            return;
+        "dup-confirm-yes" or "dup-confirm-no" => HandleDuplicateConfirmAsync(component),
+        "download-pick-cancel" => HandlePickerCancelAsync(component),
+        "space-confirm-yes" or "space-confirm-no" => HandleSpaceConfirmAsync(component),
+        "cancel-confirm-remove" or "cancel-confirm-remove-delete" or "cancel-confirm-no" => HandleCancelConfirmAsync(component),
+        _ => Task.CompletedTask
+    };
 
+    private async Task HandleDuplicateConfirmAsync(SocketMessageComponent component)
+    {
         try
         {
             if (!_pendingDuplicateConfirmations.TryRemove(component.Message.Id, out var pending))
@@ -496,6 +555,99 @@ public sealed class DownloadBotService(
         }
     }
 
+    private Task HandlePickerCancelAsync(SocketMessageComponent component)
+    {
+        _pendingPicks.TryRemove(component.Message.Id, out _);
+        logger.LogInformation("User {User} cancelled the picker on message {MessageId}", component.User.Username, component.Message.Id);
+
+        return component.UpdateAsync(m =>
+        {
+            m.Content = "Cancelled.";
+            m.Embed = null;
+            m.Components = new ComponentBuilder().Build();
+        });
+    }
+
+    private async Task HandleSpaceConfirmAsync(SocketMessageComponent component)
+    {
+        try
+        {
+            if (!_pendingSpaceConfirmations.TryRemove(component.Message.Id, out var pending))
+            {
+                await component.UpdateAsync(m => m.Content = "This confirmation has expired.");
+                return;
+            }
+
+            if (component.Data.CustomId == "space-confirm-no")
+            {
+                await component.UpdateAsync(m =>
+                {
+                    m.Content = $"Skipped **{pending.Picked.Title}** — not enough free space.";
+                    m.Embed = null;
+                    m.Components = new ComponentBuilder().Build();
+                });
+                return;
+            }
+
+            await component.DeferAsync();
+            await CompleteAddAsync(component, pending.Picked, pending.Type);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to handle space confirmation on message {MessageId}", component.Message.Id);
+        }
+    }
+
+    private async Task HandleCancelConfirmAsync(SocketMessageComponent component)
+    {
+        try
+        {
+            if (!_pendingCancelConfirmations.TryRemove(component.Message.Id, out var chosen))
+            {
+                await component.UpdateAsync(m => m.Content = "This confirmation has expired.");
+                return;
+            }
+
+            if (component.Data.CustomId == "cancel-confirm-no")
+            {
+                await component.UpdateAsync(m =>
+                {
+                    m.Content = $"Left **{chosen.Title}** as is.";
+                    m.Components = new ComponentBuilder().Build();
+                });
+                return;
+            }
+
+            var deleteFiles = component.Data.CustomId == "cancel-confirm-remove-delete";
+            await component.DeferAsync();
+
+            try
+            {
+                await qbit.RemoveTorrentAsync(chosen.InfoHash, deleteFiles);
+                tracking.Untrack(chosen.InfoHash);
+                logger.LogInformation("User {User} cancelled \"{Title}\" (hash {Hash}), deleteFiles={DeleteFiles}",
+                    component.User.Username, chosen.Title, chosen.InfoHash, deleteFiles);
+
+                await component.ModifyOriginalResponseAsync(m =>
+                {
+                    m.Content = deleteFiles
+                        ? $"🗑️ Removed **{chosen.Title}** and deleted its files."
+                        : $"🛑 Removed **{chosen.Title}** (files kept).";
+                    m.Components = new ComponentBuilder().Build();
+                });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to cancel \"{Title}\"", chosen.Title);
+                await component.ModifyOriginalResponseAsync(m => m.Content = $"Failed to cancel **{chosen.Title}**: {ex.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to handle cancel confirmation on message {MessageId}", component.Message.Id);
+        }
+    }
+
     private async Task PostPickerAsync(SocketSlashCommand command, string title, string type, IReadOnlyList<SearchResult> results)
     {
         var top = results.Take(5).ToList();
@@ -513,7 +665,9 @@ public sealed class DownloadBotService(
                 $"{result.Seeders} seeders · {sizeMb} MB");
         }
 
-        var componentBuilder = new ComponentBuilder().WithSelectMenu(menu);
+        var componentBuilder = new ComponentBuilder()
+            .WithSelectMenu(menu)
+            .WithButton("Cancel", "download-pick-cancel", ButtonStyle.Secondary, row: 1);
 
         var embed = new EmbedBuilder()
             .WithTitle($"Results for \"{title}\" ({type})")
@@ -525,11 +679,15 @@ public sealed class DownloadBotService(
         logger.LogInformation("Posted picker message {MessageId} for \"{Title}\" with {Count} option(s)", message.Id, title, top.Count);
     }
 
-    private async Task OnSelectMenuExecutedAsync(SocketMessageComponent component)
+    private Task OnSelectMenuExecutedAsync(SocketMessageComponent component) => component.Data.CustomId switch
     {
-        if (component.Data.CustomId != "download-pick")
-            return;
+        "download-pick" => HandleDownloadPickAsync(component),
+        "cancel-pick" => HandleCancelPickAsync(component),
+        _ => Task.CompletedTask
+    };
 
+    private async Task HandleDownloadPickAsync(SocketMessageComponent component)
+    {
         try
         {
             // Acknowledge within Discord's 3-second window immediately — adding to qBittorrent and
@@ -548,21 +706,10 @@ public sealed class DownloadBotService(
             var picked = pick.Results[index];
             logger.LogInformation("User {User} picked option {Index}: \"{Title}\"", component.User.Username, index, picked.Title);
 
-            var (added, infoHash) = await AddToQBittorrentAsync(picked, pick.Type);
+            if (await PostSpaceWarningIfInsufficientAsync(component, picked, pick.Type))
+                return;
 
-            if (added && infoHash is not null)
-            {
-                tracking.Track(new TrackedDownload(infoHash, picked.Title, component.Channel.Id, component.User.Id));
-            }
-
-            await component.ModifyOriginalResponseAsync(m =>
-            {
-                m.Content = added
-                    ? $"✅ **{picked.Title}** added to qBittorrent."
-                    : $"⚠️ **{picked.Title}** could not be confirmed in qBittorrent — check the logs and add it manually if needed.";
-                m.Embed = null;
-                m.Components = new ComponentBuilder().Build();
-            });
+            await CompleteAddAsync(component, picked, pick.Type);
         }
         catch (Exception ex)
         {
@@ -576,6 +723,105 @@ public sealed class DownloadBotService(
                 logger.LogError(updateEx, "Also failed to report the error back to Discord");
             }
         }
+    }
+
+    // Checks the destination drive's free space against the release's reported size before adding —
+    // same "soft warning, not a hard stop" pattern as the library duplicate-check. Returns true (and
+    // posts an "add anyway?" confirmation instead) if space looks insufficient; false if there's
+    // enough room, or if the check itself couldn't be done (never block on our own check failing).
+    private async Task<bool> PostSpaceWarningIfInsufficientAsync(SocketMessageComponent component, SearchResult picked, string type)
+    {
+        if (!qbitOptions.Value.SavePaths.TryGetValue(type, out var savePath) || string.IsNullOrWhiteSpace(savePath))
+            return false; // AddToQBittorrentAsync will surface this same configuration problem itself
+
+        try
+        {
+            var driveRoot = Path.GetPathRoot(savePath);
+            if (string.IsNullOrEmpty(driveRoot))
+                return false;
+
+            var drive = driveSpaceChecker.GetFreeSpace(driveRoot).FirstOrDefault();
+            if (drive is null)
+                return false;
+
+            var requiredGb = picked.SizeBytes / 1024.0 / 1024.0 / 1024.0;
+            if (drive.FreeGb >= requiredGb)
+                return false;
+
+            logger.LogWarning("Low space warning for \"{Title}\": needs {RequiredGb:F2} GB, {Drive} has {FreeGb:F2} GB free",
+                picked.Title, requiredGb, drive.Name, drive.FreeGb);
+
+            var embed = new EmbedBuilder()
+                .WithTitle("⚠️ Not enough free space?")
+                .WithDescription(
+                    $"**{picked.Title}** needs about **{requiredGb:F2} GB**, but **{drive.Name}** only has " +
+                    $"**{drive.FreeGb:F2} GB** free.")
+                .WithFooter("Add it anyway?")
+                .Build();
+
+            var buttons = new ComponentBuilder()
+                .WithButton("Add anyway", "space-confirm-yes", ButtonStyle.Primary)
+                .WithButton("Cancel", "space-confirm-no", ButtonStyle.Secondary);
+
+            await component.ModifyOriginalResponseAsync(m =>
+            {
+                m.Content = null;
+                m.Embed = embed;
+                m.Components = buttons.Build();
+            });
+
+            _pendingSpaceConfirmations[component.Message.Id] = new PendingSpaceConfirmation(picked, type);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Low-space check failed for \"{Title}\"; proceeding without it", picked.Title);
+            return false;
+        }
+    }
+
+    private async Task CompleteAddAsync(SocketMessageComponent component, SearchResult picked, string type)
+    {
+        var (added, infoHash) = await AddToQBittorrentAsync(picked, type);
+
+        if (added && infoHash is not null)
+        {
+            tracking.Track(new TrackedDownload(infoHash, picked.Title, component.Channel.Id, component.User.Id));
+        }
+
+        await component.ModifyOriginalResponseAsync(m =>
+        {
+            m.Content = added
+                ? $"✅ **{picked.Title}** added to qBittorrent."
+                : $"⚠️ **{picked.Title}** could not be confirmed in qBittorrent — check the logs and add it manually if needed.";
+            m.Embed = null;
+            m.Components = new ComponentBuilder().Build();
+        });
+    }
+
+    private async Task HandleCancelPickAsync(SocketMessageComponent component)
+    {
+        if (!_pendingCancelPicks.TryRemove(component.Message.Id, out var mine))
+        {
+            await component.UpdateAsync(m => m.Content = "This selection has expired.");
+            return;
+        }
+
+        var index = int.Parse(component.Data.Values.First());
+        var chosen = mine[index];
+
+        var buttons = new ComponentBuilder()
+            .WithButton("Remove (keep files)", "cancel-confirm-remove", ButtonStyle.Primary)
+            .WithButton("Remove + delete files", "cancel-confirm-remove-delete", ButtonStyle.Danger)
+            .WithButton("Nevermind", "cancel-confirm-no", ButtonStyle.Secondary);
+
+        await component.UpdateAsync(m =>
+        {
+            m.Content = $"Cancel **{chosen.Title}**? Files already downloaded are kept unless you choose to delete them.";
+            m.Components = buttons.Build();
+        });
+
+        _pendingCancelConfirmations[component.Message.Id] = chosen;
     }
 
     private async Task HandleDownloadManyAsync(SocketSlashCommand command)
