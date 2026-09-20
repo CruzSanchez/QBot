@@ -195,6 +195,11 @@ public sealed class DownloadBotService(
             .AddOption("drive", ApplicationCommandOptionType.String, "Optional: check only this drive letter (e.g. G)", isRequired: false)
             .Build();
 
+        var activeDownloadsCommand = new SlashCommandBuilder()
+            .WithName("active-downloads")
+            .WithDescription("Show what qBittorrent is currently downloading")
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -203,6 +208,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(downloadManyCommand, guildId);
                 await client.Rest.CreateGuildCommand(helpCommand, guildId);
                 await client.Rest.CreateGuildCommand(driveCheckCommand, guildId);
+                await client.Rest.CreateGuildCommand(activeDownloadsCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -211,6 +217,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(downloadManyCommand);
                 await client.Rest.CreateGlobalCommand(helpCommand);
                 await client.Rest.CreateGlobalCommand(driveCheckCommand);
+                await client.Rest.CreateGlobalCommand(activeDownloadsCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -263,8 +270,49 @@ public sealed class DownloadBotService(
             case "drive-check":
                 await HandleDriveCheckAsync(command);
                 break;
+            case "active-downloads":
+                await HandleActiveDownloadsAsync(command);
+                break;
         }
     }
+
+    private async Task HandleActiveDownloadsAsync(SocketSlashCommand command)
+    {
+        await command.DeferAsync();
+
+        IReadOnlyList<TorrentState> all;
+        try
+        {
+            all = await qbit.GetAllTorrentsAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch active downloads from qBittorrent");
+            await command.FollowupAsync($"Failed to reach qBittorrent: {ex.Message}");
+            return;
+        }
+
+        var active = all.Where(t => t.IsActiveDownload).OrderByDescending(t => t.Progress).ToList();
+
+        logger.LogInformation("/active-downloads invoked by {User} -> {Count} active", command.User.Username, active.Count);
+
+        if (active.Count == 0)
+        {
+            await command.FollowupAsync("No active downloads right now.");
+            return;
+        }
+
+        var embed = new EmbedBuilder()
+            .WithTitle($"Active downloads ({active.Count})")
+            .WithDescription(string.Join('\n', active.Select(FormatActiveDownload)))
+            .Build();
+
+        await command.FollowupAsync(embed: embed);
+    }
+
+    private static string FormatActiveDownload(TorrentState t) =>
+        $"**{Truncate(t.Name, 80)}** — {t.Progress * 100:F1}% ({t.State}) — " +
+        $"{ActiveDownloadFormatter.FormatSpeed(t.DownloadSpeedBytesPerSec)}, {ActiveDownloadFormatter.FormatEta(t.EtaSeconds)}";
 
     private Task HandleDriveCheckAsync(SocketSlashCommand command)
     {
@@ -320,6 +368,8 @@ public sealed class DownloadBotService(
             .AddField("/drive-check drive",
                 "Shows free space on every attached drive except C:. Pass `drive` (e.g. `G`) to check just one.\n" +
                 "Example: `/drive-check` or `/drive-check drive:G`")
+            .AddField("/active-downloads",
+                "Shows what qBittorrent is currently downloading, with progress, speed, and ETA for each.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. You'll get pinged in this server once it finishes downloading.")

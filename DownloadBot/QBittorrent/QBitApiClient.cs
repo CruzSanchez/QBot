@@ -12,7 +12,7 @@ public interface IQBitApiClient
     Task StopTorrentAsync(string infoHash, CancellationToken cancellationToken = default);
 }
 
-public sealed record TorrentState(string Hash, string Name, string State, double Progress)
+public sealed record TorrentState(string Hash, string Name, string State, double Progress, long DownloadSpeedBytesPerSec = 0, long EtaSeconds = 0)
 {
     // qBittorrent states meaning the download itself has finished (seeding/uploading states, paused-after-completion, etc).
     private static readonly HashSet<string> CompletedStates =
@@ -30,6 +30,16 @@ public sealed record TorrentState(string Hash, string Name, string State, double
         new(StringComparer.OrdinalIgnoreCase) { "error", "missingFiles" };
 
     public bool IsError => ErrorStates.Contains(State);
+
+    // States where a torrent is still actively in the download pipeline (progressing, waiting on a
+    // slot, verifying, etc.) — distinct from paused, which the user didn't ask to be told about.
+    private static readonly HashSet<string> ActiveDownloadStates =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "downloading", "metaDL", "forcedDL", "allocating", "checkingDL", "stalledDL", "queuedDL"
+        };
+
+    public bool IsActiveDownload => ActiveDownloadStates.Contains(State);
 }
 
 public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOptions> options) : IQBitApiClient
@@ -60,11 +70,7 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
         if (torrent.ValueKind != JsonValueKind.Object)
             return null;
 
-        return new TorrentState(
-            torrent.GetProperty("hash").GetString() ?? infoHash,
-            torrent.GetProperty("name").GetString() ?? "",
-            torrent.GetProperty("state").GetString() ?? "",
-            torrent.GetProperty("progress").GetDouble());
+        return ParseTorrent(torrent, infoHash);
     }
 
     public async Task<IReadOnlyList<TorrentState>> GetAllTorrentsAsync(CancellationToken cancellationToken = default)
@@ -88,15 +94,20 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
         var results = new List<TorrentState>();
         foreach (var torrent in doc.RootElement.EnumerateArray())
         {
-            results.Add(new TorrentState(
-                torrent.GetProperty("hash").GetString() ?? "",
-                torrent.GetProperty("name").GetString() ?? "",
-                torrent.GetProperty("state").GetString() ?? "",
-                torrent.GetProperty("progress").GetDouble()));
+            results.Add(ParseTorrent(torrent, torrent.TryGetProperty("hash", out var h) ? h.GetString() ?? "" : ""));
         }
 
         return results;
     }
+
+    private static TorrentState ParseTorrent(JsonElement torrent, string fallbackHash) =>
+        new(
+            torrent.TryGetProperty("hash", out var hash) ? hash.GetString() ?? fallbackHash : fallbackHash,
+            torrent.TryGetProperty("name", out var name) ? name.GetString() ?? "" : "",
+            torrent.TryGetProperty("state", out var state) ? state.GetString() ?? "" : "",
+            torrent.TryGetProperty("progress", out var progress) ? progress.GetDouble() : 0,
+            torrent.TryGetProperty("dlspeed", out var dlspeed) ? dlspeed.GetInt64() : 0,
+            torrent.TryGetProperty("eta", out var eta) ? eta.GetInt64() : 0);
 
     // qBittorrent hands the URL/magnet to its own HTTP client (not ours), sidestepping the redirect
     // and encoding quirks we previously had to work around ourselves just to download a .torrent file.
