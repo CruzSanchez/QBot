@@ -7,8 +7,12 @@ public static class FeedEndpoint
 {
     public static void MapFeedEndpoint(this WebApplication app)
     {
-        app.MapGet("/feed", (PendingItemQueue queue) =>
+        app.MapGet("/feed", (PendingItemQueue queue, ILogger<PendingItemQueue> logger) =>
         {
+            var items = queue.GetAll();
+            logger.LogInformation("/feed requested — returning {Count} item(s): {Titles}",
+                items.Count, string.Join(", ", items.Select(i => i.Title)));
+
             var feed = new SyndicationFeed(
                 "DownloadBot Feed",
                 "Pending items picked in Discord, waiting for qBittorrent to pick up.",
@@ -17,7 +21,7 @@ public static class FeedEndpoint
                 LastUpdatedTime = DateTimeOffset.UtcNow
             };
 
-            feed.Items = queue.GetAll().Select(item => new SyndicationItem(
+            feed.Items = items.Select(item => new SyndicationItem(
                 item.Title,
                 item.Title,
                 new Uri(item.Link),

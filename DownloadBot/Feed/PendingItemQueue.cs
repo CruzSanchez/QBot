@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
 namespace DownloadBot.Feed;
 
-public sealed class PendingItemQueue
+public sealed class PendingItemQueue(ILogger<PendingItemQueue> logger)
 {
     private readonly ConcurrentDictionary<string, PendingItem> _items = new();
 
@@ -17,8 +18,10 @@ public sealed class PendingItemQueue
         var cutoff = DateTimeOffset.UtcNow - maxAge;
         foreach (var item in _items.Values)
         {
-            if (item.AddedAt < cutoff)
-                _items.TryRemove(item.Id, out _);
+            if (item.AddedAt < cutoff && _items.TryRemove(item.Id, out _))
+            {
+                logger.LogWarning("Expired unclaimed feed item \"{Title}\" after {Age} — qBittorrent never picked it up", item.Title, maxAge);
+            }
         }
     }
 }

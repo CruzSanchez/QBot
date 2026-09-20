@@ -6,6 +6,12 @@ using DownloadBot.Search;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Logging.AddSimpleConsole(o =>
+{
+    o.TimestampFormat = "HH:mm:ss.fff ";
+    o.SingleLine = true;
+});
+
 builder.Services.Configure<DiscordOptions>(builder.Configuration.GetSection("Discord"));
 builder.Services.Configure<JackettOptions>(builder.Configuration.GetSection("Jackett"));
 builder.Services.Configure<QBittorrentOptions>(builder.Configuration.GetSection("QBittorrent"));

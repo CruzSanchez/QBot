@@ -153,6 +153,8 @@ public sealed class DownloadBotService(
         var title = (string)command.Data.Options.First(o => o.Name == "title").Value;
         var type = (string)command.Data.Options.First(o => o.Name == "type").Value;
 
+        logger.LogInformation("/download invoked by {User}: title={Title} type={Type}", command.User.Username, title, type);
+
         await command.DeferAsync();
 
         IReadOnlyList<SearchResult> results;
@@ -166,6 +168,8 @@ public sealed class DownloadBotService(
             await command.FollowupAsync($"Search failed: {ex.Message}");
             return;
         }
+
+        logger.LogInformation("Jackett returned {Count} result(s) for {Query}", results.Count, title);
 
         if (results.Count == 0)
         {
@@ -202,6 +206,7 @@ public sealed class DownloadBotService(
 
         var message = await command.FollowupAsync(embed: embed, components: componentBuilder.Build());
         _pendingPicks[message.Id] = new PendingPick(type, top);
+        logger.LogInformation("Posted picker message {MessageId} for \"{Title}\" with {Count} option(s)", message.Id, title, top.Count);
     }
 
     private async Task OnSelectMenuExecutedAsync(SocketMessageComponent component)
@@ -209,22 +214,40 @@ public sealed class DownloadBotService(
         if (component.Data.CustomId != "download-pick")
             return;
 
-        if (!_pendingPicks.TryRemove(component.Message.Id, out var pick))
+        try
         {
-            await component.UpdateAsync(m => m.Content = "This selection has expired.");
-            return;
+            if (!_pendingPicks.TryRemove(component.Message.Id, out var pick))
+            {
+                logger.LogWarning("Selection on message {MessageId} had no matching pending pick (expired or already consumed)", component.Message.Id);
+                await component.UpdateAsync(m => m.Content = "This selection has expired.");
+                return;
+            }
+
+            var index = int.Parse(component.Data.Values.First());
+            var picked = pick.Results[index];
+            logger.LogInformation("User {User} picked option {Index}: \"{Title}\"", component.User.Username, index, picked.Title);
+
+            QueuePicked(picked, pick.Type, component.Channel.Id, component.User.Id);
+
+            await component.UpdateAsync(m =>
+            {
+                m.Content = $"Queued **{picked.Title}** — it will appear in the RSS feed for qBittorrent to pick up.";
+                m.Embed = null;
+                m.Components = new ComponentBuilder().Build();
+            });
         }
-
-        var index = int.Parse(component.Data.Values.First());
-        var picked = pick.Results[index];
-        QueuePicked(picked, pick.Type, component.Channel.Id, component.User.Id);
-
-        await component.UpdateAsync(m =>
+        catch (Exception ex)
         {
-            m.Content = $"Queued **{picked.Title}** — it will appear in the RSS feed for qBittorrent to pick up.";
-            m.Embed = null;
-            m.Components = new ComponentBuilder().Build();
-        });
+            logger.LogError(ex, "Failed to handle selection on message {MessageId}", component.Message.Id);
+            try
+            {
+                await component.UpdateAsync(m => m.Content = $"Something went wrong queuing that: {ex.Message}");
+            }
+            catch (Exception updateEx)
+            {
+                logger.LogError(updateEx, "Also failed to report the error back to Discord");
+            }
+        }
     }
 
     private async Task HandleDownloadManyAsync(SocketSlashCommand command)
@@ -298,6 +321,7 @@ public sealed class DownloadBotService(
             Title = taggedTitle,
             Link = picked.MagnetOrTorrentLink
         });
+        logger.LogInformation("Queued \"{Title}\" for the RSS feed; queue now has {Count} item(s)", taggedTitle, queue.GetAll().Count);
 
         var infoHash = MagnetHash.TryExtract(picked.MagnetOrTorrentLink);
         if (infoHash is not null)
