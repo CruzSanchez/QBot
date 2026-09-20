@@ -83,17 +83,24 @@ public sealed class DownloadBotService(
             .AddOption("type", ApplicationCommandOptionType.String, "Content type applied to all titles", isRequired: true, choices: TypeChoices)
             .Build();
 
+        var helpCommand = new SlashCommandBuilder()
+            .WithName("download-help")
+            .WithDescription("Show how to use the download commands")
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
             {
                 await client.Rest.CreateGuildCommand(downloadCommand, guildId);
                 await client.Rest.CreateGuildCommand(downloadManyCommand, guildId);
+                await client.Rest.CreateGuildCommand(helpCommand, guildId);
             }
             else
             {
                 await client.Rest.CreateGlobalCommand(downloadCommand);
                 await client.Rest.CreateGlobalCommand(downloadManyCommand);
+                await client.Rest.CreateGlobalCommand(helpCommand);
             }
         }
         catch (Exception ex)
@@ -112,7 +119,33 @@ public sealed class DownloadBotService(
             case "download-many":
                 await HandleDownloadManyAsync(command);
                 break;
+            case "download-help":
+                await HandleHelpAsync(command);
+                break;
         }
+    }
+
+    private static Task HandleHelpAsync(SocketSlashCommand command)
+    {
+        var embed = new EmbedBuilder()
+            .WithTitle("Download bot — how to use it")
+            .WithDescription("Search torrent indexers from Discord and queue a download for qBittorrent to pick up automatically.")
+            .AddField("/download title type",
+                "Search for one title. Pick your `type` (Movie, TV, Kids Movie, Kids TV), " +
+                "then choose the exact release from the dropdown of top results.\n" +
+                "Example: `/download title:Dune Part Two type:movie`")
+            .AddField("/download-many titles type",
+                "Search for several titles at once, separated by commas (or newlines). " +
+                "You get a separate picker for each title, so you still choose the exact release for every one.\n" +
+                "Example: `/download-many titles:Bluey, Paw Patrol type:kids-tv`\n" +
+                "Limit: 20 titles per command.")
+            .AddField("What happens after you pick",
+                "The chosen release is added to the download queue and shows up in qBittorrent automatically " +
+                "within a few minutes. You'll get pinged in this server once it finishes downloading.")
+            .WithFooter("Ask whoever runs the bot if a search comes back empty — it may need more indexers configured.")
+            .Build();
+
+        return command.RespondAsync(embed: embed, ephemeral: true);
     }
 
     private async Task HandleDownloadAsync(SocketSlashCommand command)
