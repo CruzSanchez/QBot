@@ -117,25 +117,40 @@ public sealed class DownloadBotService(
     private static string FormatCentral(DateTimeOffset utc) =>
         $"{TimeZoneInfo.ConvertTime(utc, CentralTimeZone):yyyy-MM-dd HH:mm:ss} CST";
 
+    // Short bounded backoff for transient failures (a brief DNS/network blip) — enough to ride out a
+    // hiccup without meaningfully delaying the ApplicationStopping shutdown path that also calls this.
+    private static readonly TimeSpan[] StatusPostRetryDelays = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)];
+
     private async Task PostStatusAsync(string message)
     {
         var channelId = options.Value.StatusChannelId;
         if (channelId is null)
             return;
 
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            if (client.GetChannel(channelId.Value) is not IMessageChannel channel)
+            try
             {
-                logger.LogWarning("Could not resolve status channel {ChannelId}", channelId);
+                if (client.GetChannel(channelId.Value) is not IMessageChannel channel)
+                {
+                    logger.LogWarning("Could not resolve status channel {ChannelId}", channelId);
+                    return;
+                }
+
+                await channel.SendMessageAsync(message);
                 return;
             }
-
-            await channel.SendMessageAsync(message);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to post status message to channel {ChannelId}", channelId);
+            catch (Exception ex) when (attempt < StatusPostRetryDelays.Length)
+            {
+                logger.LogWarning(ex, "Failed to post status message to channel {ChannelId} (attempt {Attempt}/{Total}) — retrying in {Delay}s",
+                    channelId, attempt + 1, StatusPostRetryDelays.Length + 1, StatusPostRetryDelays[attempt].TotalSeconds);
+                await Task.Delay(StatusPostRetryDelays[attempt]);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to post status message to channel {ChannelId} after {Attempts} attempt(s)", channelId, StatusPostRetryDelays.Length + 1);
+                return;
+            }
         }
     }
 
