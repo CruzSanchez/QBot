@@ -1,10 +1,8 @@
 using global::Discord.WebSocket;
 using DownloadBot.Discord;
-using DownloadBot.Feed;
 using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
-using Microsoft.Extensions.Logging;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -29,7 +27,6 @@ try
     builder.Services.Configure<JackettOptions>(builder.Configuration.GetSection("Jackett"));
     builder.Services.Configure<QBittorrentOptions>(builder.Configuration.GetSection("QBittorrent"));
 
-    builder.Services.AddSingleton<PendingItemQueue>();
     builder.Services.AddSingleton<DownloadTrackingStore>();
     builder.Services.AddSingleton<DiscordSocketClient>();
     builder.Services.AddSingleton<IPlexLibraryScanner, PlexLibraryScanner>();
@@ -43,26 +40,12 @@ try
             UseCookies = true
         });
 
-    // .torrent file redirects (e.g. through Jackett's /dl/ proxy) sometimes carry unencoded characters
-    // in the Location header that .NET's automatic redirect handling fails to parse, so this client
-    // follows redirects manually instead — see DownloadBotService.ResolveInfoHashAsync.
-    builder.Services.AddHttpClient("TorrentFileDownloader")
-        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-
     builder.Services.AddHostedService<DownloadBotService>();
     builder.Services.AddHostedService<CompletionPollerService>();
 
     var app = builder.Build();
 
     app.MapGet("/", () => "DownloadBot is running.");
-    app.MapFeedEndpoint();
-
-    // Drop feed items qBittorrent hasn't polled within 10 minutes so stale entries don't re-match forever.
-    var queue = app.Services.GetRequiredService<PendingItemQueue>();
-    var expiryLogger = app.Services.GetRequiredService<ILogger<Program>>();
-    var expiryTimer = new Timer(_ => queue.RemoveExpiredAsync(TimeSpan.FromMinutes(10))
-        .ContinueWith(t => expiryLogger.LogError(t.Exception, "Feed expiry check failed"), TaskContinuationOptions.OnlyOnFaulted),
-        null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
 
     app.Run();
 }

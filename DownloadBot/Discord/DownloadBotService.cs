@@ -1,12 +1,10 @@
 using System.Collections.Concurrent;
 using global::Discord;
 using global::Discord.WebSocket;
-using DownloadBot.Feed;
 using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -15,11 +13,11 @@ namespace DownloadBot.Discord;
 public sealed class DownloadBotService(
     DiscordSocketClient client,
     IJackettClient jackett,
-    PendingItemQueue queue,
+    IQBitApiClient qbit,
     DownloadTrackingStore tracking,
     IPlexLibraryScanner libraryScanner,
-    IHttpClientFactory httpClientFactory,
     IOptions<DiscordOptions> options,
+    IOptions<QBittorrentOptions> qbitOptions,
     ILogger<DownloadBotService> logger) : BackgroundService
 {
     // Search results for an in-flight picker, keyed by the picker message's id.
@@ -206,8 +204,8 @@ public sealed class DownloadBotService(
                 "Before searching, the bot checks the Plex library folders for a matching title/year. " +
                 "If found, it asks you to confirm before searching anyway instead of blocking you outright.")
             .AddField("What happens after you pick",
-                "The chosen release is added to the download queue and shows up in qBittorrent automatically " +
-                "within a few minutes. You'll get pinged in this server once it finishes downloading.")
+                "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
+                "whether it worked. You'll get pinged in this server once it finishes downloading.")
             .WithFooter("Ask whoever runs the bot if a search comes back empty — it may need more indexers configured.")
             .Build();
 
@@ -367,9 +365,9 @@ public sealed class DownloadBotService(
 
         try
         {
-            // Acknowledge within Discord's 3-second window immediately — resolving the info hash below
-            // can take several seconds (downloading a .torrent file, following redirects), which would
-            // otherwise make the later response miss the window and fail with "Unknown interaction".
+            // Acknowledge within Discord's 3-second window immediately — adding to qBittorrent and
+            // confirming it took can take several seconds, which would otherwise make the later
+            // response miss the window and fail with "Unknown interaction".
             await component.DeferAsync();
 
             if (!_pendingPicks.TryRemove(component.Message.Id, out var pick))
@@ -383,11 +381,18 @@ public sealed class DownloadBotService(
             var picked = pick.Results[index];
             logger.LogInformation("User {User} picked option {Index}: \"{Title}\"", component.User.Username, index, picked.Title);
 
-            await QueuePickedAsync(picked, pick.Type, component.Channel.Id, component.User.Id);
+            var (added, infoHash) = await AddToQBittorrentAsync(picked, pick.Type);
+
+            if (added && infoHash is not null)
+            {
+                tracking.Track(new TrackedDownload(infoHash, picked.Title, component.Channel.Id, component.User.Id));
+            }
 
             await component.ModifyOriginalResponseAsync(m =>
             {
-                m.Content = $"Queued **{picked.Title}** — it will appear in the RSS feed for qBittorrent to pick up.";
+                m.Content = added
+                    ? $"✅ **{picked.Title}** added to qBittorrent."
+                    : $"⚠️ **{picked.Title}** could not be confirmed in qBittorrent — check the logs and add it manually if needed.";
                 m.Embed = null;
                 m.Components = new ComponentBuilder().Build();
             });
@@ -475,108 +480,73 @@ public sealed class DownloadBotService(
         }
     }
 
-    private async Task QueuePickedAsync(SearchResult picked, string type, ulong channelId, ulong userId)
+    // Adds directly via qBittorrent's own API instead of writing to an RSS feed and hoping its RSS
+    // Reader polls in time — that indirect handoff was racing qBittorrent's poll interval and its
+    // Auto Downloading Rules, with failures only surfacing (or not) minutes later. This adds and
+    // confirms within seconds, giving immediate, reliable feedback either way.
+    private async Task<(bool Added, string? InfoHash)> AddToQBittorrentAsync(SearchResult picked, string type)
     {
         var marker = CategoryMarkers.GetValueOrDefault(type, "");
         var taggedTitle = string.IsNullOrEmpty(marker) ? picked.Title : $"{marker} {picked.Title}";
-        var infoHash = await ResolveInfoHashAsync(picked.MagnetOrTorrentLink);
 
-        queue.Add(new PendingItem
+        if (!qbitOptions.Value.SavePaths.TryGetValue(type, out var savePath) || string.IsNullOrWhiteSpace(savePath))
         {
-            Id = Guid.NewGuid().ToString(),
-            Title = taggedTitle,
-            Link = picked.MagnetOrTorrentLink,
-            InfoHash = infoHash,
-            ChannelId = channelId,
-            UserId = userId
-        });
-        logger.LogInformation("Queued \"{Title}\" for the RSS feed; queue now has {Count} item(s)", taggedTitle, queue.GetAll().Count);
-
-        if (infoHash is not null)
-        {
-            tracking.Track(new TrackedDownload(infoHash, picked.Title, channelId, userId));
+            logger.LogError("No QBittorrent:SavePaths entry configured for type \"{Type}\"", type);
+            return (false, null);
         }
-        else
-        {
-            logger.LogInformation("Could not resolve an info hash for {Title}; completion notification will not be tracked", picked.Title);
-        }
-    }
 
-    private async Task<string?> ResolveInfoHashAsync(string link)
-    {
-        var magnetHash = MagnetHash.TryExtract(link);
-        if (magnetHash is not null)
-            return magnetHash;
-
-        // Not a magnet link — Jackett gave back a .torrent file URL instead, which doesn't carry the
-        // hash inline. Download it and compute the hash from its bencoded "info" dict. The redirect
-        // chain can also land on a magnet URI directly (some trackers skip serving an actual .torrent
-        // file) — that's handled inside the loop below, since it can't be fetched over HTTP.
         try
         {
-            return await ResolveInfoHashFollowingRedirectsAsync(link);
+            await qbit.AddTorrentAsync(picked.MagnetOrTorrentLink, savePath);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Failed to download/parse .torrent file at {Link} to compute its info hash", link);
-            return null;
+            logger.LogError(ex, "qBittorrent rejected adding \"{Title}\"", taggedTitle);
+            return (false, null);
         }
-    }
 
-    // Some indexer redirects (e.g. Jackett's /dl/ proxy landing on the tracker's own file host) carry
-    // unencoded characters in the Location header that .NET's built-in redirect handling can't parse
-    // into a valid connection authority. Following manually lets us sanitize each hop's Location first.
-    private async Task<string?> ResolveInfoHashFollowingRedirectsAsync(string link)
-    {
-        var httpClient = httpClientFactory.CreateClient("TorrentFileDownloader");
-        var currentUri = new Uri(link);
+        var knownHash = MagnetHash.TryExtract(picked.MagnetOrTorrentLink);
+        var confirmedHash = await ConfirmAddedAsync(knownHash, picked.Title);
 
-        for (var hop = 0; hop < 5; hop++)
+        if (confirmedHash is null)
         {
-            if (currentUri.Scheme.Equals("magnet", StringComparison.OrdinalIgnoreCase))
-                return MagnetHash.TryExtract(currentUri.OriginalString);
-
-            using var response = await httpClient.GetAsync(currentUri, HttpCompletionOption.ResponseHeadersRead);
-
-            if (!IsRedirect(response.StatusCode))
-            {
-                response.EnsureSuccessStatusCode();
-                var torrentBytes = await response.Content.ReadAsByteArrayAsync();
-                return TorrentInfoHash.TryCompute(torrentBytes);
-            }
-
-            var rawLocation = response.Headers.Location?.OriginalString;
-            if (string.IsNullOrEmpty(rawLocation))
-            {
-                logger.LogWarning("Redirect from {Uri} had no usable Location header", currentUri);
-                return null;
-            }
-
-            currentUri = ResolveRedirectUri(currentUri, rawLocation);
+            logger.LogWarning("qBittorrent never showed \"{Title}\" after adding it — treating as failed", taggedTitle);
+            return (false, null);
         }
 
-        logger.LogWarning("Too many redirects while downloading {Link}", link);
-        return null;
+        logger.LogInformation("Confirmed \"{Title}\" added to qBittorrent (hash {Hash}, save path {SavePath})", taggedTitle, confirmedHash, savePath);
+        return (true, confirmedHash);
     }
 
-    private static bool IsRedirect(System.Net.HttpStatusCode status) =>
-        status is System.Net.HttpStatusCode.MovedPermanently
-            or System.Net.HttpStatusCode.Found
-            or System.Net.HttpStatusCode.SeeOther
-            or System.Net.HttpStatusCode.TemporaryRedirect
-            or System.Net.HttpStatusCode.PermanentRedirect;
-
-    private static Uri ResolveRedirectUri(Uri baseUri, string rawLocation)
+    // qBittorrent's "Ok." response to /torrents/add is not a reliable success signal on its own, so
+    // this polls for the torrent to actually appear before calling the add successful.
+    private async Task<string?> ConfirmAddedAsync(string? knownHash, string title)
     {
-        // Raw spaces are the most common offender in the wild; encode them before attempting to parse.
-        var sanitized = rawLocation.Replace(" ", "%20");
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1));
 
-        if (Uri.TryCreate(sanitized, UriKind.Absolute, out var absolute))
-            return absolute;
-        if (Uri.TryCreate(baseUri, sanitized, out var combined))
-            return combined;
+            try
+            {
+                if (knownHash is not null)
+                {
+                    if (await qbit.GetTorrentStateAsync(knownHash) is not null)
+                        return knownHash;
+                    continue;
+                }
 
-        throw new UriFormatException($"Could not resolve redirect location \"{rawLocation}\" against {baseUri}");
+                var all = await qbit.GetAllTorrentsAsync();
+                var match = all.FirstOrDefault(t => TorrentNameMatcher.LooselyMatch(t.Name, title));
+                if (match is not null)
+                    return match.Hash;
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Confirmation check failed for \"{Title}\" (attempt {Attempt})", title, attempt + 1);
+            }
+        }
+
+        return null;
     }
 
     private static string Truncate(string value, int maxLength) =>

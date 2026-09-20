@@ -8,6 +8,7 @@ public interface IQBitApiClient
 {
     Task<TorrentState?> GetTorrentStateAsync(string infoHash, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TorrentState>> GetAllTorrentsAsync(CancellationToken cancellationToken = default);
+    Task AddTorrentAsync(string urlOrMagnet, string savePath, CancellationToken cancellationToken = default);
 }
 
 public sealed record TorrentState(string Hash, string Name, string State, double Progress)
@@ -94,6 +95,39 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
         }
 
         return results;
+    }
+
+    // qBittorrent hands the URL/magnet to its own HTTP client (not ours), sidestepping the redirect
+    // and encoding quirks we previously had to work around ourselves just to download a .torrent file.
+    // Its "Ok." response is not a reliable success signal on its own (older versions return it even
+    // when the add silently failed server-side) — callers must independently confirm the torrent
+    // actually appears via GetTorrentStateAsync/GetAllTorrentsAsync afterward.
+    public async Task AddTorrentAsync(string urlOrMagnet, string savePath, CancellationToken cancellationToken = default)
+    {
+        await EnsureLoggedInAsync(cancellationToken);
+
+        var opts = options.Value;
+        var url = $"{opts.BaseUrl.TrimEnd('/')}/api/v2/torrents/add";
+
+        using var content = new MultipartFormDataContent
+        {
+            { new StringContent(urlOrMagnet), "urls" },
+            { new StringContent(savePath), "savepath" },
+            { new StringContent("false"), "autoTMM" } // explicit: honor our savepath regardless of qBittorrent's global default
+        };
+
+        var response = await httpClient.PostAsync(url, content, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            _loggedIn = false;
+            throw new InvalidOperationException("qBittorrent session expired while adding a torrent");
+        }
+
+        response.EnsureSuccessStatusCode();
+        var body = (await response.Content.ReadAsStringAsync(cancellationToken)).Trim();
+        if (!body.Equals("Ok.", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"qBittorrent rejected the add request: {body}");
     }
 
     private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
