@@ -78,7 +78,7 @@ public sealed class DownloadBotService(
 
         var downloadManyCommand = new SlashCommandBuilder()
             .WithName("download-many")
-            .WithDescription("Queue several titles at once (auto-picks the top-seeded result for each)")
+            .WithDescription("Search several titles at once, with a picker posted for each")
             .AddOption("titles", ApplicationCommandOptionType.String, "Titles separated by commas", isRequired: true)
             .AddOption("type", ApplicationCommandOptionType.String, "Content type applied to all titles", isRequired: true, choices: TypeChoices)
             .Build();
@@ -134,12 +134,18 @@ public sealed class DownloadBotService(
             return;
         }
 
-        var top = results.Take(5).ToList();
-        if (top.Count == 0)
+        if (results.Count == 0)
         {
             await command.FollowupAsync($"No results found for **{title}**.");
             return;
         }
+
+        await PostPickerAsync(command, title, type, results);
+    }
+
+    private async Task PostPickerAsync(SocketSlashCommand command, string title, string type, IReadOnlyList<SearchResult> results)
+    {
+        var top = results.Take(5).ToList();
 
         var menu = new SelectMenuBuilder()
             .WithCustomId("download-pick")
@@ -207,9 +213,9 @@ public sealed class DownloadBotService(
 
         await command.DeferAsync();
 
-        var queued = new List<string>();
         var notFound = new List<string>();
         var failed = new List<string>();
+        var pickersPosted = 0;
 
         foreach (var title in titles)
         {
@@ -225,27 +231,27 @@ public sealed class DownloadBotService(
                 continue;
             }
 
-            // No interactive picker here — with many titles in one command, auto-take the top-seeded result.
-            var best = results.FirstOrDefault();
-            if (best is null)
+            if (results.Count == 0)
             {
                 notFound.Add(title);
                 continue;
             }
 
-            QueuePicked(best, type, command.Channel.Id, command.User.Id);
-            queued.Add($"{title} → {best.Title}");
+            // One picker message per title, posted independently, so each can be picked at its own pace/order.
+            await PostPickerAsync(command, title, type, results);
+            pickersPosted++;
         }
 
-        var summary = new EmbedBuilder().WithTitle($"Queued {queued.Count}/{titles.Count} titles ({type})");
-        if (queued.Count > 0)
-            summary.AddField("Queued", string.Join('\n', queued.Select(q => $"✅ {q}")).Truncate(1024));
-        if (notFound.Count > 0)
-            summary.AddField("No results", string.Join('\n', notFound.Select(t => $"❌ {t}")).Truncate(1024));
-        if (failed.Count > 0)
-            summary.AddField("Search failed", string.Join('\n', failed.Select(t => $"⚠️ {t}")).Truncate(1024));
+        if (notFound.Count > 0 || failed.Count > 0)
+        {
+            var summary = new EmbedBuilder().WithTitle($"Posted {pickersPosted} picker(s) — some titles need attention");
+            if (notFound.Count > 0)
+                summary.AddField("No results", string.Join('\n', notFound.Select(t => $"❌ {t}")).Truncate(1024));
+            if (failed.Count > 0)
+                summary.AddField("Search failed", string.Join('\n', failed.Select(t => $"⚠️ {t}")).Truncate(1024));
 
-        await command.FollowupAsync(embed: summary.Build());
+            await command.FollowupAsync(embed: summary.Build());
+        }
     }
 
     private void QueuePicked(SearchResult picked, string type, ulong channelId, ulong userId)
