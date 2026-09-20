@@ -314,10 +314,15 @@ public sealed class DownloadBotService(
 
         try
         {
+            // Acknowledge within Discord's 3-second window immediately — resolving the info hash below
+            // can take several seconds (downloading a .torrent file, following redirects), which would
+            // otherwise make the later response miss the window and fail with "Unknown interaction".
+            await component.DeferAsync();
+
             if (!_pendingPicks.TryRemove(component.Message.Id, out var pick))
             {
                 logger.LogWarning("Selection on message {MessageId} had no matching pending pick (expired or already consumed)", component.Message.Id);
-                await component.UpdateAsync(m => m.Content = "This selection has expired.");
+                await component.ModifyOriginalResponseAsync(m => m.Content = "This selection has expired.");
                 return;
             }
 
@@ -327,7 +332,7 @@ public sealed class DownloadBotService(
 
             await QueuePickedAsync(picked, pick.Type, component.Channel.Id, component.User.Id);
 
-            await component.UpdateAsync(m =>
+            await component.ModifyOriginalResponseAsync(m =>
             {
                 m.Content = $"Queued **{picked.Title}** — it will appear in the RSS feed for qBittorrent to pick up.";
                 m.Embed = null;
@@ -339,7 +344,7 @@ public sealed class DownloadBotService(
             logger.LogError(ex, "Failed to handle selection on message {MessageId}", component.Message.Id);
             try
             {
-                await component.UpdateAsync(m => m.Content = $"Something went wrong queuing that: {ex.Message}");
+                await component.ModifyOriginalResponseAsync(m => m.Content = $"Something went wrong queuing that: {ex.Message}");
             }
             catch (Exception updateEx)
             {
