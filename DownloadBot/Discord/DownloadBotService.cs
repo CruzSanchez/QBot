@@ -451,11 +451,12 @@ public sealed class DownloadBotService(
             return magnetHash;
 
         // Not a magnet link — Jackett gave back a .torrent file URL instead, which doesn't carry the
-        // hash inline. Download it and compute the hash from its bencoded "info" dict.
+        // hash inline. Download it and compute the hash from its bencoded "info" dict. The redirect
+        // chain can also land on a magnet URI directly (some trackers skip serving an actual .torrent
+        // file) — that's handled inside the loop below, since it can't be fetched over HTTP.
         try
         {
-            var torrentBytes = await DownloadFollowingRedirectsAsync(link);
-            return torrentBytes is not null ? TorrentInfoHash.TryCompute(torrentBytes) : null;
+            return await ResolveInfoHashFollowingRedirectsAsync(link);
         }
         catch (Exception ex)
         {
@@ -467,19 +468,23 @@ public sealed class DownloadBotService(
     // Some indexer redirects (e.g. Jackett's /dl/ proxy landing on the tracker's own file host) carry
     // unencoded characters in the Location header that .NET's built-in redirect handling can't parse
     // into a valid connection authority. Following manually lets us sanitize each hop's Location first.
-    private async Task<byte[]?> DownloadFollowingRedirectsAsync(string link)
+    private async Task<string?> ResolveInfoHashFollowingRedirectsAsync(string link)
     {
         var httpClient = httpClientFactory.CreateClient("TorrentFileDownloader");
         var currentUri = new Uri(link);
 
         for (var hop = 0; hop < 5; hop++)
         {
+            if (currentUri.Scheme.Equals("magnet", StringComparison.OrdinalIgnoreCase))
+                return MagnetHash.TryExtract(currentUri.OriginalString);
+
             using var response = await httpClient.GetAsync(currentUri, HttpCompletionOption.ResponseHeadersRead);
 
             if (!IsRedirect(response.StatusCode))
             {
                 response.EnsureSuccessStatusCode();
-                return await response.Content.ReadAsByteArrayAsync();
+                var torrentBytes = await response.Content.ReadAsByteArrayAsync();
+                return TorrentInfoHash.TryCompute(torrentBytes);
             }
 
             var rawLocation = response.Headers.Location?.OriginalString;
