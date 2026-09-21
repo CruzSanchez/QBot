@@ -62,6 +62,7 @@ public sealed class DownloadBotService(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         client.Log += LogAsync;
+        client.Connected += OnConnectedAsync;
         client.Ready += OnReadyAsync;
         client.Disconnected += OnDisconnectedAsync;
         client.SlashCommandExecuted += OnSlashCommandExecutedAsync;
@@ -108,6 +109,14 @@ public sealed class DownloadBotService(
 
         return PostStatusAsync($"🔴 Bot disconnected: {ex.Message}");
     }
+
+    // Connected fires on every successful (re)connection — a fresh identify at startup AND a resumed
+    // session after a transient drop ("Server requested a reconnect"). Ready, by contrast, only fires
+    // on a fresh identify; Discord.Net doesn't re-fire it after a resume, since the client already has
+    // its guild/session data cached. Posting the connect notice here (instead of from Ready) is what
+    // actually closes the gap between every disconnect notice and its matching reconnect notice.
+    private Task OnConnectedAsync() =>
+        PostStatusAsync($"🟢 Bot connected - {FormatCentral(DateTimeOffset.UtcNow)}");
 
     private async Task HeartbeatLoopAsync(CancellationToken stoppingToken)
     {
@@ -244,8 +253,6 @@ public sealed class DownloadBotService(
         {
             logger.LogError(ex, "Failed to register slash command");
         }
-
-        await PostStatusAsync($"🟢 Bot connected - {FormatCentral(DateTimeOffset.UtcNow)}");
     }
 
     // Command names retired by renames — individual Create*Command calls never remove a stale command
