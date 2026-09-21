@@ -61,13 +61,20 @@ public sealed class DownloadBotService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Discord.Net dispatches events by awaiting the handler inline on its own gateway processing
+        // loop — an event handler doing real work (REST calls, retries) blocks that loop for as long
+        // as it takes, which can delay heartbeats and other incoming events. Firing the actual work
+        // off as a detached task (the standard Discord.Net pattern: return an already-completed Task
+        // immediately, let the real handler run independently) keeps the gateway loop free regardless
+        // of how long any individual handler takes. This matters a lot more now that PostStatusAsync
+        // (called from Connected) has a retry budget of up to ~30 seconds.
         client.Log += LogAsync;
-        client.Connected += OnConnectedAsync;
-        client.Ready += OnReadyAsync;
-        client.Disconnected += OnDisconnectedAsync;
-        client.SlashCommandExecuted += OnSlashCommandExecutedAsync;
-        client.SelectMenuExecuted += OnSelectMenuExecutedAsync;
-        client.ButtonExecuted += OnButtonExecutedAsync;
+        client.Connected += () => FireAndForget(OnConnectedAsync, "Connected");
+        client.Ready += () => FireAndForget(OnReadyAsync, "Ready");
+        client.Disconnected += ex => FireAndForget(() => OnDisconnectedAsync(ex), "Disconnected");
+        client.SlashCommandExecuted += command => FireAndForget(() => OnSlashCommandExecutedAsync(command), "SlashCommandExecuted");
+        client.SelectMenuExecuted += component => FireAndForget(() => OnSelectMenuExecutedAsync(component), "SelectMenuExecuted");
+        client.ButtonExecuted += component => FireAndForget(() => OnButtonExecutedAsync(component), "ButtonExecuted");
 
         var token = options.Value.Token;
         if (string.IsNullOrWhiteSpace(token))
@@ -99,6 +106,27 @@ public sealed class DownloadBotService(
         _ = HeartbeatLoopAsync(stoppingToken);
 
         await Task.Delay(Timeout.Infinite, stoppingToken).ContinueWith(_ => { }, TaskScheduler.Default);
+    }
+
+    // Returns immediately with an already-completed Task (so the gateway dispatch loop isn't blocked),
+    // while the actual handler runs independently. Any exception that escapes the handler is caught
+    // and logged here instead of becoming an unobserved task exception.
+    private Task FireAndForget(Func<Task> handler, string name)
+    {
+        _ = RunSafelyAsync(handler, name);
+        return Task.CompletedTask;
+    }
+
+    private async Task RunSafelyAsync(Func<Task> handler, string name)
+    {
+        try
+        {
+            await handler();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Unhandled exception in {Handler} event handler", name);
+        }
     }
 
     private Task OnDisconnectedAsync(Exception ex)
