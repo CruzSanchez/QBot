@@ -138,9 +138,13 @@ public sealed class DownloadBotService(
     private static string FormatCentral(DateTimeOffset utc) =>
         $"{TimeZoneInfo.ConvertTime(utc, CentralTimeZone):yyyy-MM-dd HH:mm:ss} CST";
 
-    // Short bounded backoff for transient failures (a brief DNS/network blip) — enough to ride out a
-    // hiccup without meaningfully delaying the ApplicationStopping shutdown path that also calls this.
-    private static readonly TimeSpan[] StatusPostRetryDelays = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)];
+    // Covers two different transient conditions with one retry schedule: a brief network/DNS blip on
+    // the send itself, and — the more common one in practice — the status channel not being resolvable
+    // yet because Discord.Net's guild/channel cache isn't fully populated immediately when Connected
+    // fires (observed gap between Connected and Ready: 20+ seconds). Without retrying the "not found"
+    // case too, a fresh connect's notice would silently never send. ~30s total budget.
+    private static readonly TimeSpan[] StatusPostRetryDelays =
+        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)];
 
     private async Task PostStatusAsync(string message)
     {
@@ -150,18 +154,28 @@ public sealed class DownloadBotService(
 
         for (var attempt = 0; ; attempt++)
         {
-            try
+            var isLastAttempt = attempt >= StatusPostRetryDelays.Length;
+
+            if (client.GetChannel(channelId.Value) is not IMessageChannel channel)
             {
-                if (client.GetChannel(channelId.Value) is not IMessageChannel channel)
+                if (isLastAttempt)
                 {
-                    logger.LogWarning("Could not resolve status channel {ChannelId}", channelId);
+                    logger.LogWarning("Could not resolve status channel {ChannelId} after {Attempts} attempt(s)", channelId, attempt + 1);
                     return;
                 }
 
+                logger.LogDebug("Status channel {ChannelId} not resolvable yet (attempt {Attempt}) — retrying in {Delay}s",
+                    channelId, attempt + 1, StatusPostRetryDelays[attempt].TotalSeconds);
+                await Task.Delay(StatusPostRetryDelays[attempt]);
+                continue;
+            }
+
+            try
+            {
                 await channel.SendMessageAsync(message);
                 return;
             }
-            catch (Exception ex) when (attempt < StatusPostRetryDelays.Length)
+            catch (Exception ex) when (!isLastAttempt)
             {
                 logger.LogWarning(ex, "Failed to post status message to channel {ChannelId} (attempt {Attempt}/{Total}) — retrying in {Delay}s",
                     channelId, attempt + 1, StatusPostRetryDelays.Length + 1, StatusPostRetryDelays[attempt].TotalSeconds);
@@ -169,7 +183,7 @@ public sealed class DownloadBotService(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to post status message to channel {ChannelId} after {Attempts} attempt(s)", channelId, StatusPostRetryDelays.Length + 1);
+                logger.LogError(ex, "Failed to post status message to channel {ChannelId} after {Attempts} attempt(s)", channelId, attempt + 1);
                 return;
             }
         }
