@@ -36,11 +36,12 @@ public sealed class DownloadBotService(
     // "Not enough free space, add anyway?" confirmations, keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, PendingSpaceConfirmation> _pendingSpaceConfirmations = new();
 
-    // /cancel's "which of your downloads?" picker options, keyed by that message's id.
-    private readonly ConcurrentDictionary<ulong, IReadOnlyList<TrackedDownload>> _pendingCancelPicks = new();
+    // /cancel's "which torrent?" picker options (sourced from qBittorrent directly, not tied to
+    // whoever added it), keyed by that message's id.
+    private readonly ConcurrentDictionary<ulong, IReadOnlyList<TorrentState>> _pendingCancelPicks = new();
 
     // /cancel's "remove, remove+delete, or nevermind?" confirmations, keyed by that message's id.
-    private readonly ConcurrentDictionary<ulong, TrackedDownload> _pendingCancelConfirmations = new();
+    private readonly ConcurrentDictionary<ulong, TorrentState> _pendingCancelConfirmations = new();
 
     private sealed record PendingPick(string Type, IReadOnlyList<SearchResult> Results);
 
@@ -213,7 +214,7 @@ public sealed class DownloadBotService(
 
         var cancelCommand = new SlashCommandBuilder()
             .WithName("cancel")
-            .WithDescription("Cancel one of your active downloads")
+            .WithDescription("Cancel any active or stuck torrent in qBittorrent")
             .Build();
 
         try
@@ -299,29 +300,46 @@ public sealed class DownloadBotService(
 
     private async Task HandleCancelAsync(SocketSlashCommand command)
     {
-        var mine = tracking.GetAll().Where(d => d.UserId == command.User.Id).ToList();
+        await command.DeferAsync(ephemeral: true);
 
-        if (mine.Count == 0)
+        // Sourced directly from qBittorrent — same as /active-downloads — rather than from our own
+        // DownloadTrackingStore, which only knows about adds the bot itself confirmed and attributed
+        // to whoever ran /download. That missed anything added by someone else, added outside the
+        // bot entirely, or where the post-add confirmation step happened to false-negative. Not tied
+        // to any particular user: anyone can cancel anything currently active or stuck.
+        IReadOnlyList<TorrentState> all;
+        try
         {
-            await command.RespondAsync("You have no active downloads to cancel.", ephemeral: true);
+            all = await qbit.GetAllTorrentsAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to fetch torrents from qBittorrent for /cancel");
+            await command.FollowupAsync($"Failed to reach qBittorrent: {ex.Message}", ephemeral: true);
             return;
         }
 
-        await command.DeferAsync(ephemeral: true);
+        var candidates = all.Where(t => t.IsActiveDownload || t.IsError).Take(25).ToList(); // Discord select menus cap at 25 options
+
+        if (candidates.Count == 0)
+        {
+            await command.FollowupAsync("Nothing active or stuck in qBittorrent to cancel.", ephemeral: true);
+            return;
+        }
 
         var menu = new SelectMenuBuilder()
             .WithCustomId("cancel-pick")
-            .WithPlaceholder("Choose a download to cancel");
+            .WithPlaceholder("Choose a torrent to cancel");
 
-        foreach (var (download, index) in mine.Select((d, i) => (d, i)))
-            menu.AddOption(Truncate(download.Title, 100), index.ToString());
+        foreach (var (torrent, index) in candidates.Select((t, i) => (t, i)))
+            menu.AddOption(Truncate(torrent.Name, 100), index.ToString(), Truncate(torrent.State, 100));
 
         var componentBuilder = new ComponentBuilder().WithSelectMenu(menu);
 
-        var message = await command.FollowupAsync("Which download do you want to cancel?", components: componentBuilder.Build(), ephemeral: true);
-        _pendingCancelPicks[message.Id] = mine;
+        var message = await command.FollowupAsync("Which torrent do you want to cancel?", components: componentBuilder.Build(), ephemeral: true);
+        _pendingCancelPicks[message.Id] = candidates;
 
-        logger.LogInformation("/cancel invoked by {User} -> {Count} active download(s) to choose from", command.User.Username, mine.Count);
+        logger.LogInformation("/cancel invoked by {User} -> {Count} candidate(s) to choose from", command.User.Username, candidates.Count);
     }
 
     private async Task HandleActiveDownloadsAsync(SocketSlashCommand command)
@@ -419,8 +437,9 @@ public sealed class DownloadBotService(
             .AddField("/active-downloads",
                 "Shows what qBittorrent is currently downloading, with progress, speed, and ETA for each.")
             .AddField("/cancel",
-                "Cancel one of your own active downloads. Pick which one, then choose to remove it " +
-                "(keeping any partially-downloaded files) or remove and delete the files too.")
+                "Cancel any active or stuck torrent in qBittorrent — not just ones you added. Pick " +
+                "which one, then choose to remove it (keeping any partially-downloaded files) or " +
+                "remove and delete the files too.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
@@ -612,10 +631,10 @@ public sealed class DownloadBotService(
 
             if (component.Data.CustomId == "cancel-confirm-no")
             {
-                logger.LogInformation("User {User} decided not to cancel \"{Title}\" after all", component.User.Username, chosen.Title);
+                logger.LogInformation("User {User} decided not to cancel \"{Title}\" after all", component.User.Username, chosen.Name);
                 await component.UpdateAsync(m =>
                 {
-                    m.Content = $"Left **{chosen.Title}** as is.";
+                    m.Content = $"Left **{chosen.Name}** as is.";
                     m.Components = new ComponentBuilder().Build();
                 });
                 return;
@@ -626,23 +645,23 @@ public sealed class DownloadBotService(
 
             try
             {
-                await qbit.RemoveTorrentAsync(chosen.InfoHash, deleteFiles);
-                tracking.Untrack(chosen.InfoHash);
+                await qbit.RemoveTorrentAsync(chosen.Hash, deleteFiles);
+                tracking.Untrack(chosen.Hash);
                 logger.LogInformation("User {User} cancelled \"{Title}\" (hash {Hash}), deleteFiles={DeleteFiles}",
-                    component.User.Username, chosen.Title, chosen.InfoHash, deleteFiles);
+                    component.User.Username, chosen.Name, chosen.Hash, deleteFiles);
 
                 await component.ModifyOriginalResponseAsync(m =>
                 {
                     m.Content = deleteFiles
-                        ? $"🗑️ Removed **{chosen.Title}** and deleted its files."
-                        : $"🛑 Removed **{chosen.Title}** (files kept).";
+                        ? $"🗑️ Removed **{chosen.Name}** and deleted its files."
+                        : $"🛑 Removed **{chosen.Name}** (files kept).";
                     m.Components = new ComponentBuilder().Build();
                 });
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to cancel \"{Title}\"", chosen.Title);
-                await component.ModifyOriginalResponseAsync(m => m.Content = $"Failed to cancel **{chosen.Title}**: {ex.Message}");
+                logger.LogError(ex, "Failed to cancel \"{Title}\"", chosen.Name);
+                await component.ModifyOriginalResponseAsync(m => m.Content = $"Failed to cancel **{chosen.Name}**: {ex.Message}");
             }
         }
         catch (Exception ex)
@@ -804,15 +823,15 @@ public sealed class DownloadBotService(
 
     private async Task HandleCancelPickAsync(SocketMessageComponent component)
     {
-        if (!_pendingCancelPicks.TryRemove(component.Message.Id, out var mine))
+        if (!_pendingCancelPicks.TryRemove(component.Message.Id, out var candidates))
         {
             await component.UpdateAsync(m => m.Content = "This selection has expired.");
             return;
         }
 
         var index = int.Parse(component.Data.Values.First());
-        var chosen = mine[index];
-        logger.LogInformation("User {User} selected \"{Title}\" (hash {Hash}) to cancel", component.User.Username, chosen.Title, chosen.InfoHash);
+        var chosen = candidates[index];
+        logger.LogInformation("User {User} selected \"{Title}\" (hash {Hash}) to cancel", component.User.Username, chosen.Name, chosen.Hash);
 
         var buttons = new ComponentBuilder()
             .WithButton("Remove (keep files)", "cancel-confirm-remove", ButtonStyle.Primary)
@@ -821,7 +840,7 @@ public sealed class DownloadBotService(
 
         await component.UpdateAsync(m =>
         {
-            m.Content = $"Cancel **{chosen.Title}**? Files already downloaded are kept unless you choose to delete them.";
+            m.Content = $"Cancel **{chosen.Name}**? Files already downloaded are kept unless you choose to delete them.";
             m.Components = buttons.Build();
         });
 
