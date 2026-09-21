@@ -44,6 +44,20 @@ dotnet run
 The app listens on `http://localhost:5151` (`/` is just a health check — there's no
 other public endpoint).
 
+## Running it without a terminal
+
+For day-to-day use (or if whoever's running the server isn't a developer):
+
+- **`run-bot.bat`** — double-click to start it. Does the same `dotnet run` shown above
+  from inside `DownloadBot/`, so it picks up the same secrets/config automatically.
+  Requires the .NET SDK on that machine (the same one used to build/test it) — this
+  isn't a portable/standalone build, just a launcher.
+- **`install-startup-task.bat`** — one-time setup (ideally "Run as administrator")
+  that registers a Windows Scheduled Task to run `run-bot.bat` automatically at
+  login, so the bot comes back up on its own after a restart. Modifies Task
+  Scheduler, so run it yourself rather than expecting it to happen silently.
+- **`uninstall-startup-task.bat`** — removes that scheduled task.
+
 ## Running tests
 
 ```bash
