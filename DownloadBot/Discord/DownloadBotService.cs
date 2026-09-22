@@ -371,8 +371,9 @@ public sealed class DownloadBotService(
             }
 
             var active = all.Where(t => t.IsActiveDownload).ToList();
-            var embed = DashboardFormatter.BuildActiveDownloadsEmbed(active, DateTimeOffset.UtcNow);
             var isLast = i == ticks - 1;
+            var now = DateTimeOffset.UtcNow;
+            var embed = DashboardFormatter.BuildActiveDownloadsEmbed(active, now, isLast ? null : now + tickInterval);
 
             await command.ModifyOriginalResponseAsync(m =>
             {

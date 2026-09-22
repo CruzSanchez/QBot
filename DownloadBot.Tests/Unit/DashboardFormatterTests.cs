@@ -36,4 +36,22 @@ public class DashboardFormatterTests
         var embed = DashboardFormatter.BuildActiveDownloadsEmbed([], DateTimeOffset.UtcNow);
         Assert.Equal(DashboardFormatter.BlurpleColor, embed.Color);
     }
+
+    [Fact]
+    public void BuildActiveDownloadsEmbed_WithoutNextRefresh_HasNoCountdownField()
+    {
+        var embed = DashboardFormatter.BuildActiveDownloadsEmbed([], DateTimeOffset.UtcNow);
+        Assert.Empty(embed.Fields);
+    }
+
+    [Fact]
+    public void BuildActiveDownloadsEmbed_WithNextRefresh_AddsDiscordRelativeTimestampField()
+    {
+        var next = DateTimeOffset.UtcNow.AddSeconds(30);
+        var embed = DashboardFormatter.BuildActiveDownloadsEmbed([], DateTimeOffset.UtcNow, next);
+
+        var field = Assert.Single(embed.Fields);
+        Assert.Equal("Next update", field.Name);
+        Assert.Equal($"<t:{next.ToUnixTimeSeconds()}:R>", field.Value);
+    }
 }

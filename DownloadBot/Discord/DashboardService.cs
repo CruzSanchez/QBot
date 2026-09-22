@@ -39,11 +39,11 @@ public sealed class DashboardService(
 
         do
         {
-            await RefreshAsync(channelId.Value, stoppingToken);
+            await RefreshAsync(channelId.Value, interval, stoppingToken);
         } while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
-    private async Task RefreshAsync(ulong channelId, CancellationToken cancellationToken)
+    private async Task RefreshAsync(ulong channelId, TimeSpan interval, CancellationToken cancellationToken)
     {
         if (discord.GetChannel(channelId) is not IMessageChannel channel)
         {
@@ -63,7 +63,8 @@ public sealed class DashboardService(
         }
 
         var active = all.Where(t => t.IsActiveDownload).ToList();
-        var embed = DashboardFormatter.BuildActiveDownloadsEmbed(active, DateTimeOffset.UtcNow);
+        var now = DateTimeOffset.UtcNow;
+        var embed = DashboardFormatter.BuildActiveDownloadsEmbed(active, now, now + interval);
 
         IUserMessage? existing = null;
         if (_messageId is { } id)

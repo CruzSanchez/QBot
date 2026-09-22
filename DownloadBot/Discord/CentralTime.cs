@@ -11,5 +11,5 @@ public static class CentralTime
     }
 
     public static string Format(DateTimeOffset utc) =>
-        $"{TimeZoneInfo.ConvertTime(utc, Zone):yyyy-MM-dd HH:mm:ss} CST";
+        $"{TimeZoneInfo.ConvertTime(utc, Zone):yyyy-MM-dd hh:mm:ss tt} CST";
 }

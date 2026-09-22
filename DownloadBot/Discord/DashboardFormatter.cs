@@ -13,7 +13,10 @@ public static class DashboardFormatter
     public static readonly Color YellowColor = new(0xFE, 0xE7, 0x5C);
     public static readonly Color RedColor = new(0xED, 0x42, 0x45);
 
-    public static Embed BuildActiveDownloadsEmbed(IReadOnlyList<TorrentState> active, DateTimeOffset updatedAt)
+    // nextRefreshAt, when given, renders as Discord's native "<t:...:R>" relative timestamp — the
+    // client itself keeps that counting down live, no repeated message edits required. Omit it (null)
+    // when there won't be another refresh (e.g. /status's final tick).
+    public static Embed BuildActiveDownloadsEmbed(IReadOnlyList<TorrentState> active, DateTimeOffset updatedAt, DateTimeOffset? nextRefreshAt = null)
     {
         var ordered = active.OrderByDescending(t => t.Progress).ToList();
 
@@ -24,6 +27,9 @@ public static class DashboardFormatter
                 ? "Nothing downloading right now."
                 : string.Join("\n\n", ordered.Select(FormatLine)))
             .WithFooter($"Updated {CentralTime.Format(updatedAt)}");
+
+        if (nextRefreshAt is { } next)
+            builder.AddField("Next update", $"<t:{next.ToUnixTimeSeconds()}:R>");
 
         return builder.Build();
     }
