@@ -16,4 +16,11 @@ public static class ActiveDownloadFormatter
         var eta = TimeSpan.FromSeconds(etaSeconds);
         return eta.TotalHours >= 1 ? $"{(int)eta.TotalHours}h {eta.Minutes}m left" : $"{eta.Minutes}m {eta.Seconds}s left";
     }
+
+    public static string FormatProgressBar(double progress, int width = 20)
+    {
+        var clamped = Math.Clamp(progress, 0, 1);
+        var filled = (int)Math.Round(clamped * width);
+        return $"[{new string('█', filled)}{new string('░', width - filled)}]";
+    }
 }

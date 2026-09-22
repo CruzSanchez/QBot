@@ -27,4 +27,21 @@ public class ActiveDownloadFormatterTests
     {
         Assert.Equal(expected, ActiveDownloadFormatter.FormatEta(etaSeconds));
     }
+
+    [Theory]
+    [InlineData(0.0, "[░░░░░░░░░░░░░░░░░░░░]")]
+    [InlineData(1.0, "[████████████████████]")]
+    [InlineData(0.5, "[██████████░░░░░░░░░░]")]
+    [InlineData(-1.0, "[░░░░░░░░░░░░░░░░░░░░]")] // clamped
+    [InlineData(1.5, "[████████████████████]")] // clamped
+    public void FormatProgressBar_FillsProportionallyAndClamps(double progress, string expected)
+    {
+        Assert.Equal(expected, ActiveDownloadFormatter.FormatProgressBar(progress));
+    }
+
+    [Fact]
+    public void FormatProgressBar_HonorsCustomWidth()
+    {
+        Assert.Equal("[█████░░░░░]", ActiveDownloadFormatter.FormatProgressBar(0.5, width: 10));
+    }
 }

@@ -43,6 +43,7 @@ try
 
     builder.Services.AddHostedService<DownloadBotService>();
     builder.Services.AddHostedService<CompletionPollerService>();
+    builder.Services.AddHostedService<DashboardService>();
 
     var app = builder.Build();
 

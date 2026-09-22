@@ -95,7 +95,7 @@ public sealed class DownloadBotService(
             _isShuttingDown = true;
             try
             {
-                PostStatusAsync($"🔴 Bot shutting down - {FormatCentral(DateTimeOffset.UtcNow)}").GetAwaiter().GetResult();
+                PostStatusAsync($"🔴 Bot shutting down - {CentralTime.Format(DateTimeOffset.UtcNow)}").GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -144,27 +144,16 @@ public sealed class DownloadBotService(
     // its guild/session data cached. Posting the connect notice here (instead of from Ready) is what
     // actually closes the gap between every disconnect notice and its matching reconnect notice.
     private Task OnConnectedAsync() =>
-        PostStatusAsync($"🟢 Bot connected - {FormatCentral(DateTimeOffset.UtcNow)}");
+        PostStatusAsync($"🟢 Bot connected - {CentralTime.Format(DateTimeOffset.UtcNow)}");
 
     private async Task HeartbeatLoopAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(30));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            await PostStatusAsync($"Bot Status: LIVE - {FormatCentral(DateTimeOffset.UtcNow)}");
+            await PostStatusAsync($"Bot Status: LIVE - {CentralTime.Format(DateTimeOffset.UtcNow)}");
         }
     }
-
-    private static readonly TimeZoneInfo CentralTimeZone = ResolveCentralTimeZone();
-
-    private static TimeZoneInfo ResolveCentralTimeZone()
-    {
-        try { return TimeZoneInfo.FindSystemTimeZoneById("Central Standard Time"); }
-        catch { return TimeZoneInfo.FindSystemTimeZoneById("America/Chicago"); }
-    }
-
-    private static string FormatCentral(DateTimeOffset utc) =>
-        $"{TimeZoneInfo.ConvertTime(utc, CentralTimeZone):yyyy-MM-dd HH:mm:ss} CST";
 
     // Covers two different transient conditions with one retry schedule: a brief network/DNS blip on
     // the send itself, and — the more common one in practice — the status channel not being resolvable
@@ -268,6 +257,11 @@ public sealed class DownloadBotService(
             .WithDescription("Cancel any active or stuck torrent in qBittorrent")
             .Build();
 
+        var statusCommand = new SlashCommandBuilder()
+            .WithName("status")
+            .WithDescription("Live-updating view of active downloads for about a minute")
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -278,6 +272,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(driveCheckCommand, guildId);
                 await client.Rest.CreateGuildCommand(activeDownloadsCommand, guildId);
                 await client.Rest.CreateGuildCommand(cancelCommand, guildId);
+                await client.Rest.CreateGuildCommand(statusCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -288,6 +283,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(driveCheckCommand);
                 await client.Rest.CreateGlobalCommand(activeDownloadsCommand);
                 await client.Rest.CreateGlobalCommand(cancelCommand);
+                await client.Rest.CreateGlobalCommand(statusCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -344,6 +340,50 @@ public sealed class DownloadBotService(
             case "cancel":
                 await HandleCancelAsync(command);
                 break;
+            case "status":
+                await HandleStatusAsync(command);
+                break;
+        }
+    }
+
+    // Posts the same embed the live dashboard shows and self-edits it every few seconds for about a
+    // minute — a cheap "live view" for anyone who wants one without waiting on DashboardChannelId.
+    private async Task HandleStatusAsync(SocketSlashCommand command)
+    {
+        await command.DeferAsync(ephemeral: true);
+        logger.LogInformation("/status invoked by {User}", command.User.Username);
+
+        const int ticks = 12;
+        var tickInterval = TimeSpan.FromSeconds(5);
+
+        for (var i = 0; i < ticks; i++)
+        {
+            IReadOnlyList<TorrentState> all;
+            try
+            {
+                all = await qbit.GetAllTorrentsAsync();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "/status failed to reach qBittorrent");
+                await command.FollowupAsync($"Failed to reach qBittorrent: {ex.Message}", ephemeral: true);
+                return;
+            }
+
+            var active = all.Where(t => t.IsActiveDownload).ToList();
+            var embed = DashboardFormatter.BuildActiveDownloadsEmbed(active, DateTimeOffset.UtcNow);
+            var isLast = i == ticks - 1;
+
+            await command.ModifyOriginalResponseAsync(m =>
+            {
+                m.Embed = embed;
+                m.Content = isLast ? "Live view stopped — run /status again to refresh." : null;
+            });
+
+            if (isLast)
+                break;
+
+            await Task.Delay(tickInterval);
         }
     }
 
@@ -485,6 +525,9 @@ public sealed class DownloadBotService(
                 "Example: `/drive-check` or `/drive-check drive:G`")
             .AddField("/active-downloads",
                 "Shows what qBittorrent is currently downloading, with progress, speed, and ETA for each.")
+            .AddField("/status",
+                "Same as /active-downloads, but keeps refreshing itself every few seconds for about a minute — " +
+                "a quick live view without leaving Discord open on a channel.")
             .AddField("/cancel",
                 "Cancel any active or stuck torrent in qBittorrent — not just ones you added. Pick " +
                 "which one, then choose to remove it (keeping any partially-downloaded files) or " +
@@ -493,7 +536,8 @@ public sealed class DownloadBotService(
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
                 "asked to confirm before it adds anyway. You'll get pinged in this server once it finishes " +
-                "downloading, if it stalls with no progress, or if it fails.")
+                "downloading, if it stalls with no progress, or if it fails — stall/error alerts carry a " +
+                "\"Cancel this download\" button so you can act on them right away.")
             .WithFooter("Ask whoever runs the bot if a search comes back empty — it may need more indexers configured.")
             .Build();
 
@@ -578,14 +622,57 @@ public sealed class DownloadBotService(
         return true;
     }
 
-    private Task OnButtonExecutedAsync(SocketMessageComponent component) => component.Data.CustomId switch
+    private Task OnButtonExecutedAsync(SocketMessageComponent component)
     {
-        "dup-confirm-yes" or "dup-confirm-no" => HandleDuplicateConfirmAsync(component),
-        "download-pick-cancel" => HandlePickerCancelAsync(component),
-        "space-confirm-yes" or "space-confirm-no" => HandleSpaceConfirmAsync(component),
-        "cancel-confirm-remove" or "cancel-confirm-remove-delete" or "cancel-confirm-no" => HandleCancelConfirmAsync(component),
-        _ => Task.CompletedTask
-    };
+        if (component.Data.CustomId.StartsWith("poller-cancel:", StringComparison.Ordinal))
+            return HandlePollerCancelButtonAsync(component);
+
+        return component.Data.CustomId switch
+        {
+            "dup-confirm-yes" or "dup-confirm-no" => HandleDuplicateConfirmAsync(component),
+            "download-pick-cancel" => HandlePickerCancelAsync(component),
+            "space-confirm-yes" or "space-confirm-no" => HandleSpaceConfirmAsync(component),
+            "cancel-confirm-remove" or "cancel-confirm-remove-delete" or "cancel-confirm-no" => HandleCancelConfirmAsync(component),
+            _ => Task.CompletedTask
+        };
+    }
+
+    // Lets someone jump straight from a completion/stall/error alert into the same remove/remove+delete/
+    // nevermind flow /cancel uses, without re-finding the torrent themselves. Ephemeral, like /cancel,
+    // and leaves the original public alert message untouched.
+    private async Task HandlePollerCancelButtonAsync(SocketMessageComponent component)
+    {
+        var hash = component.Data.CustomId["poller-cancel:".Length..];
+
+        try
+        {
+            await component.DeferAsync(ephemeral: true);
+
+            var state = await qbit.GetTorrentStateAsync(hash);
+            if (state is null)
+            {
+                await component.FollowupAsync("That torrent isn't in qBittorrent anymore.", ephemeral: true);
+                return;
+            }
+
+            var buttons = new ComponentBuilder()
+                .WithButton("Remove (keep files)", "cancel-confirm-remove", ButtonStyle.Primary)
+                .WithButton("Remove + delete files", "cancel-confirm-remove-delete", ButtonStyle.Danger)
+                .WithButton("Nevermind", "cancel-confirm-no", ButtonStyle.Secondary);
+
+            var message = await component.FollowupAsync(
+                $"Cancel **{state.Name}**? Files already downloaded are kept unless you choose to delete them.",
+                components: buttons.Build(), ephemeral: true);
+
+            _pendingCancelConfirmations[message.Id] = state;
+            logger.LogInformation("User {User} started a cancel from an alert button for \"{Title}\" (hash {Hash})",
+                component.User.Username, state.Name, hash);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to handle poller-cancel button for hash {Hash}", hash);
+        }
+    }
 
     private async Task HandleDuplicateConfirmAsync(SocketMessageComponent component)
     {

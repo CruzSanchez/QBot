@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using global::Discord;
 using global::Discord.WebSocket;
+using DownloadBot.Discord;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -54,7 +55,9 @@ public sealed class CompletionPollerService(
             logger.LogWarning("Detected failure for \"{Title}\" (hash {Hash}): state={State}", download.Title, download.InfoHash, state.State);
             tracking.Untrack(download.InfoHash);
             _stallTracking.TryRemove(download.InfoHash, out _);
-            await AnnounceAsync(download, $"⚠️ **{download.Title}** failed in qBittorrent (state: `{state.State}`) — check the tracker/source or remove and re-search it.");
+            await AnnounceAsync(download, "Failed",
+                $"**{download.Title}** — state: `{state.State}`\nCheck the tracker/source, or remove and re-search it.",
+                DashboardFormatter.RedColor, includeCancelButton: true);
             return;
         }
 
@@ -77,7 +80,8 @@ public sealed class CompletionPollerService(
                 logger.LogWarning(ex, "Failed to stop seeding \"{Title}\" after completion", download.Title);
             }
 
-            await AnnounceAsync(download, $"**{download.Title}** finished downloading.");
+            await AnnounceAsync(download, "Finished downloading", $"**{download.Title}**",
+                DashboardFormatter.GreenColor, includeCancelButton: false);
             return;
         }
 
@@ -97,11 +101,13 @@ public sealed class CompletionPollerService(
         logger.LogWarning("Detected stall for \"{Title}\" (hash {Hash}): state={State} progress={Progress}, no progress for over {Minutes}m",
             download.Title, download.InfoHash, state.State, state.Progress, options.Value.StallAlertMinutes);
 
-        await AnnounceAsync(download,
-            $"⏳ **{download.Title}** hasn't made progress in over {options.Value.StallAlertMinutes} minutes (state: `{state.State}`) — might be stuck (dead tracker/no seeders).");
+        await AnnounceAsync(download, "Might be stuck",
+            $"**{download.Title}** — no progress in over {options.Value.StallAlertMinutes} minutes (state: `{state.State}`)\n" +
+            "Dead tracker or no seeders — check it or cancel.",
+            DashboardFormatter.YellowColor, includeCancelButton: true);
     }
 
-    private async Task AnnounceAsync(TrackedDownload download, string message)
+    private async Task AnnounceAsync(TrackedDownload download, string title, string description, Color color, bool includeCancelButton)
     {
         if (discord.GetChannel(download.ChannelId) is not IMessageChannel channel)
         {
@@ -109,7 +115,20 @@ public sealed class CompletionPollerService(
             return;
         }
 
-        await channel.SendMessageAsync($"<@{download.UserId}> {message}");
+        var embed = new EmbedBuilder()
+            .WithColor(color)
+            .WithTitle(title)
+            .WithDescription(description)
+            .WithCurrentTimestamp()
+            .Build();
+
+        // Lets whoever sees the alert jump straight into the same remove/remove+delete/nevermind flow
+        // /cancel uses, without having to run a separate command and re-find this exact torrent.
+        var components = includeCancelButton
+            ? new ComponentBuilder().WithButton("Cancel this download", $"poller-cancel:{download.InfoHash}", ButtonStyle.Secondary).Build()
+            : null;
+
+        await channel.SendMessageAsync($"<@{download.UserId}>", embed: embed, components: components);
         logger.LogInformation("Announced \"{Title}\" to channel {ChannelId}", download.Title, download.ChannelId);
     }
 }

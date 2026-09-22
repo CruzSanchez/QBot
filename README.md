@@ -21,6 +21,13 @@ Discord /download → local library check ("already have this?") → Jackett sea
 Tracking (`hash → {title, channel, user}`) persists to `data/tracked-downloads.json`
 so a bot restart doesn't lose the completion ping for anything already added.
 
+Optionally, set `Discord:DashboardChannelId` and the bot keeps one message in that
+channel continuously up to date with everything currently downloading — no need to
+run a command to check. `/status` gives anyone the same live view on demand,
+ephemeral, for about a minute. Completion/stall/error alerts are color-coded embeds;
+stall/error ones carry a "Cancel this download" button. See
+[CLARIFICATIONS.md](CLARIFICATIONS.md) for setup.
+
 qBittorrent's RSS Reader / Auto Downloading Rules are **not used** — the bot adds
 torrents directly and gets an immediate, reliable success/failure signal instead of
 waiting on an RSS poll cycle. You can leave your existing rules in place (harmless)
@@ -94,7 +101,10 @@ DownloadBot/
 ├── Program.cs                        // wires everything together
 ├── Discord/
 │   ├── DiscordOptions.cs
-│   └── DownloadBotService.cs         // slash commands, picker, direct qBittorrent add
+│   ├── DownloadBotService.cs         // slash commands, picker, direct qBittorrent add
+│   ├── DashboardService.cs           // live "active downloads" message, edited in place on a timer
+│   ├── DashboardFormatter.cs         // shared embed styling for the dashboard, /status, and alerts
+│   └── CentralTime.cs                // shared timestamp formatting
 ├── Search/
 │   ├── SearchResult.cs
 │   ├── IJackettClient.cs
@@ -115,6 +125,6 @@ DownloadBot/
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, StallDetector, DownloadTrackingStore
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, StallDetector, DownloadTrackingStore, DashboardFormatter
 └── Integration/                      // live Jackett/qBittorrent/Discord checks, self-skipping
 ```

@@ -77,3 +77,24 @@ confirmation within ~10 seconds. Consequences:
   tracked download shows no forward progress for this long, you get pinged once
   (dead tracker / no seeders). It only alerts once per stall episode; if progress
   resumes and then stalls again later, it can alert again.
+
+## Live dashboard (2026-09-21)
+
+- **`Discord:DashboardChannelId`** (optional, `null` by default) — set this to a
+  channel ID and the bot posts one message there listing everything qBittorrent is
+  currently downloading (progress bar, speed, ETA), then edits that same message in
+  place every `QBittorrent:PollIntervalSeconds`. Leave it `null` and this feature is
+  just off — nothing posts.
+  ```
+  dotnet user-secrets set "Discord:DashboardChannelId" "123456789012345678" --project DownloadBot
+  ```
+  Pin the message yourself after the first post if you want it easy to find — the
+  bot doesn't pin it automatically. The message id persists to
+  `DownloadBot/data/dashboard-message.json` (gitignored) so a restart edits the same
+  message instead of posting a new one.
+- **Completion/stall/error alerts are now embeds**, color-coded (green/yellow/red),
+  and the stall/error ones carry a "Cancel this download" button that jumps straight
+  into the same remove/remove+delete/nevermind flow as `/cancel`.
+- **`/status`** is a lighter-weight alternative to the dashboard channel — anyone can
+  run it to get the same embed, self-refreshing every 5s for about a minute,
+  ephemeral (only they see it). No config needed.
