@@ -19,15 +19,10 @@ jobs:
           git fetch origin
           git reset --hard origin/main
 
-      # Build before touching the running bot: if this fails, the current
-      # instance keeps running untouched instead of being killed for nothing.
-      - name: Build
-        shell: pwsh
-        run: |
-          Set-Location "${{ vars.SERVER_REPO_PATH }}\DownloadBot"
-          dotnet build -c Release
-
-      - name: Restart DownloadBot
+      # Has to stop the running bot before building — dotnet run's own build keeps
+      # DownloadBot.exe open, so rebuilding in place while it's still running fails
+      # with a file-lock error (MSB3027/MSB3021). Downtime is brief either way.
+      - name: Stop DownloadBot
         shell: pwsh
         run: |
           Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
@@ -37,4 +32,13 @@ jobs:
               Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             }
           Start-Sleep -Seconds 2
-          schtasks /run /tn "DownloadBot"
+
+      - name: Build
+        shell: pwsh
+        run: |
+          Set-Location "${{ vars.SERVER_REPO_PATH }}\DownloadBot"
+          dotnet build -c Release
+
+      - name: Start DownloadBot
+        shell: pwsh
+        run: schtasks /run /tn "DownloadBot"
