@@ -22,13 +22,16 @@ jobs:
       # Has to stop the running bot before building — dotnet run's own build keeps
       # DownloadBot.exe open, so rebuilding in place while it's still running fails
       # with a file-lock error (MSB3027/MSB3021). Downtime is brief either way.
+      # On Windows, `dotnet run` execs the built apphost directly, so the actual
+      # running process is named DownloadBot.exe, not dotnet.exe — kill both names
+      # to cover it regardless of how it was last started.
       - name: Stop DownloadBot
         shell: pwsh
         run: |
-          Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
-            Where-Object { $_.CommandLine -like "*DownloadBot*" } |
+          Get-CimInstance Win32_Process |
+            Where-Object { $_.Name -in @('DownloadBot.exe', 'dotnet.exe') -and $_.CommandLine -like "*DownloadBot*" } |
             ForEach-Object {
-              Write-Host "Stopping dotnet.exe PID $($_.ProcessId)"
+              Write-Host "Stopping $($_.Name) PID $($_.ProcessId)"
               Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             }
           Start-Sleep -Seconds 2
