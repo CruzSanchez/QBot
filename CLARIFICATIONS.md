@@ -122,6 +122,17 @@ confirmation within ~10 seconds. Consequences:
       **Actions** tab — you should see a "Deploy to server" run pick it up,
       pull, build, and restart the bot automatically (`.github/workflows/deploy.yml`).
 
+- [ ] **DownloadBot scheduled task must be "Run whether user is logged on or
+      not"**, not "Run only when user is logged on" (its default when created
+      via Task Scheduler's UI or an older `install-startup-task.bat`). With
+      the "only when logged on" setting, `schtasks /run` (what the deploy
+      workflow uses to restart the bot) reports success but silently does
+      nothing if nobody's got an active interactive session at that moment —
+      which is exactly when an automated restart is likely to happen. Fix:
+      task Properties -> General -> select "Run whether user is logged on or
+      not" -> OK -> enter your Windows password when prompted. (Re-running
+      `install-startup-task.bat` now sets this correctly for a fresh install.)
+
 **Heads up**: the deploy step runs `git reset --hard origin/main` on the server
 so it always exactly matches what's pushed — any local uncommitted changes made
 directly on the server get discarded on the next push. If you ever edit files

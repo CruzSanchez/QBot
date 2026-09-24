@@ -7,6 +7,11 @@ rem to double-click anything.
 rem
 rem This modifies Windows Task Scheduler. Run it once, ideally as Administrator (right-click ->
 rem "Run as administrator") - creating a task with /rl HIGHEST can fail without elevation.
+rem
+rem /ru + /rp * mark it "Run whether user is logged on or not" instead of "only when logged on" -
+rem required for schtasks /run (e.g. from the auto-deploy workflow) to actually launch it when
+rem nobody's got an active interactive session at that moment; without this it silently no-ops.
+rem You'll be prompted for your Windows account password so Task Scheduler can store it encrypted.
 
 set TASK_NAME=DownloadBot
 set SCRIPT_PATH=%~dp0run-bot.bat
@@ -14,9 +19,11 @@ set SCRIPT_PATH=%~dp0run-bot.bat
 echo Installing scheduled task "%TASK_NAME%"...
 echo   Trigger: at logon (current user)
 echo   Runs:    %SCRIPT_PATH%
+echo   You'll be asked for your Windows password next - this lets it run even when
+echo   you're not logged in (needed for automated restarts, e.g. from a deploy).
 echo.
 
-schtasks /create /tn "%TASK_NAME%" /tr "\"%SCRIPT_PATH%\"" /sc onlogon /rl HIGHEST /f
+schtasks /create /tn "%TASK_NAME%" /tr "\"%SCRIPT_PATH%\"" /sc onlogon /ru "%USERNAME%" /rp * /rl HIGHEST /f
 
 if %ERRORLEVEL% EQU 0 (
     echo.
