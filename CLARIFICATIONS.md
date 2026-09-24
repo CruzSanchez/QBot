@@ -98,3 +98,32 @@ confirmation within ~10 seconds. Consequences:
 - **`/status`** is a lighter-weight alternative to the dashboard channel — anyone can
   run it to get the same embed, self-refreshing every 5s for about a minute,
   ephemeral (only they see it). No config needed.
+
+## Auto-deploy on push (2026-09-23)
+
+- [ ] **Set up the self-hosted runner** — one-time, done on the server itself
+      (not this dev machine), needs Administrator:
+      1. On GitHub: repo -> **Settings -> Actions -> Runners -> New self-hosted
+         runner**, pick Windows x64. Follow the PowerShell commands GitHub shows
+         you there exactly (they include a registration token generated just
+         for that request, so copy them fresh rather than reusing old ones).
+      2. When it asks how to run the runner, install it **as a service** (the
+         setup script offers this) rather than leaving `run.cmd` open in a
+         terminal, so it survives reboots the same way the bot's own scheduled
+         task does.
+      3. Confirm it shows "Idle" under Settings -> Actions -> Runners once done.
+- [ ] **Set the `SERVER_REPO_PATH` repository variable** — Settings -> Secrets
+      and variables -> Actions -> **Variables** tab -> New repository variable:
+      - Name: `SERVER_REPO_PATH`
+      - Value: the absolute path to this repo's clone **on the server**
+        (e.g. `C:\Users\<you>\Desktop\QbitBotStack`) — whatever `run-bot.bat`
+        already sits in there.
+- [ ] **Verify** by pushing any small change to `main` and checking the repo's
+      **Actions** tab — you should see a "Deploy to server" run pick it up,
+      pull, build, and restart the bot automatically (`.github/workflows/deploy.yml`).
+
+**Heads up**: the deploy step runs `git reset --hard origin/main` on the server
+so it always exactly matches what's pushed — any local uncommitted changes made
+directly on the server get discarded on the next push. If you ever edit files
+directly on the server for a quick test, commit/push them (or stash them) before
+pushing something else, or they'll be silently wiped on the next deploy.

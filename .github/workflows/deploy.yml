@@ -1,0 +1,40 @@
+name: Deploy to server
+
+# Runs on the self-hosted runner installed on the DownloadBot server itself.
+# Requires a repository variable SERVER_REPO_PATH set to the absolute path of
+# this repo's clone on that machine (Settings -> Secrets and variables ->
+# Actions -> Variables). See CLARIFICATIONS.md for the one-time runner setup.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Pull latest main
+        shell: pwsh
+        run: |
+          Set-Location "${{ vars.SERVER_REPO_PATH }}"
+          git fetch origin
+          git reset --hard origin/main
+
+      # Build before touching the running bot: if this fails, the current
+      # instance keeps running untouched instead of being killed for nothing.
+      - name: Build
+        shell: pwsh
+        run: |
+          Set-Location "${{ vars.SERVER_REPO_PATH }}\DownloadBot"
+          dotnet build -c Release
+
+      - name: Restart DownloadBot
+        shell: pwsh
+        run: |
+          Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
+            Where-Object { $_.CommandLine -like "*DownloadBot*" } |
+            ForEach-Object {
+              Write-Host "Stopping dotnet.exe PID $($_.ProcessId)"
+              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+          Start-Sleep -Seconds 2
+          schtasks /run /tn "DownloadBot"

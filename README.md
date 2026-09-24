@@ -65,6 +65,14 @@ For day-to-day use (or if whoever's running the server isn't a developer):
   Scheduler, so run it yourself rather than expecting it to happen silently.
 - **`uninstall-startup-task.bat`** — removes that scheduled task.
 
+## Auto-deploy on push
+
+`.github/workflows/deploy.yml` runs on a self-hosted GitHub Actions runner
+installed on the server itself: on every push to `main` it pulls, builds, and
+restarts the bot automatically — no manual `git pull` needed. One-time setup
+(installing the runner, setting the `SERVER_REPO_PATH` repo variable) is in
+[CLARIFICATIONS.md](CLARIFICATIONS.md).
+
 ## Running tests
 
 ```bash
