@@ -22,33 +22,37 @@ jobs:
       # Has to stop the running bot before building — dotnet run's own build keeps
       # DownloadBot.exe open, so rebuilding in place while it's still running fails
       # with a file-lock error (MSB3027/MSB3021). Downtime is brief either way.
-      # On Windows, `dotnet run` execs the built apphost directly, so the actual
-      # running process is named DownloadBot.exe, not dotnet.exe — kill both names
-      # to cover it regardless of how it was last started.
       #
-      # Asks nicely first (plain `taskkill`, no /F) so the host's ApplicationStopping
-      # hook gets to run — that's what posts the "Bot shutting down" Discord message.
-      # A hard Stop-Process/-Force kill skips that entirely. Only force-kills
-      # anything still alive after giving it a few seconds to shut down cleanly.
+      # A scheduled-task process has no window/console message loop, so plain
+      # `taskkill` (no /F) just refuses with "can only be forced" instead of
+      # actually asking it to close — and Stop-Process -Force skips the host's
+      # ApplicationStopping hook entirely (no "Bot shutting down" Discord message).
+      # POSTing /shutdown runs that same graceful-shutdown path Ctrl+C would.
+      # Only force-kills the process if it's still alive after giving it time to
+      # exit on its own.
       - name: Stop DownloadBot
         shell: pwsh
         run: |
-          function Get-DownloadBotProcesses {
-            Get-CimInstance Win32_Process |
+          try {
+            Invoke-RestMethod -Method Post -Uri "http://localhost:5151/shutdown" -TimeoutSec 5 | Out-Null
+          } catch {
+            Write-Host "Could not reach /shutdown (bot may already be down): $($_.Exception.Message)"
+          }
+
+          $deadline = (Get-Date).AddSeconds(15)
+          while ((Get-Date) -lt $deadline) {
+            $stillRunning = Get-CimInstance Win32_Process |
               Where-Object { $_.Name -in @('DownloadBot.exe', 'dotnet.exe') -and $_.CommandLine -like "*DownloadBot*" }
+            if (-not $stillRunning) { break }
+            Start-Sleep -Seconds 1
           }
 
-          Get-DownloadBotProcesses | ForEach-Object {
-            Write-Host "Requesting graceful stop of $($_.Name) PID $($_.ProcessId)"
-            taskkill /PID $_.ProcessId | Out-Null
-          }
-
-          Start-Sleep -Seconds 5
-
-          Get-DownloadBotProcesses | ForEach-Object {
-            Write-Host "Still running — force-stopping $($_.Name) PID $($_.ProcessId)"
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-          }
+          Get-CimInstance Win32_Process |
+            Where-Object { $_.Name -in @('DownloadBot.exe', 'dotnet.exe') -and $_.CommandLine -like "*DownloadBot*" } |
+            ForEach-Object {
+              Write-Host "Still running — force-stopping $($_.Name) PID $($_.ProcessId)"
+              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
 
       - name: Build
         shell: pwsh

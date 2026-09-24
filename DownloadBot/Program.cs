@@ -49,6 +49,17 @@ try
 
     app.MapGet("/", () => "DownloadBot is running.");
 
+    // Bound to localhost only (see launchSettings.json), so this is only reachable from
+    // the same machine — used by the deploy workflow to trigger a graceful shutdown
+    // (runs the same ApplicationStopping hooks Ctrl+C would, e.g. the "Bot shutting
+    // down" Discord message) instead of killing the process directly, which a
+    // non-interactive scheduled-task process can't otherwise be asked to do cleanly.
+    app.MapPost("/shutdown", (IHostApplicationLifetime lifetime) =>
+    {
+        lifetime.StopApplication();
+        return Results.Ok("Shutting down.");
+    });
+
     app.Run();
 }
 finally
