@@ -25,16 +25,30 @@ jobs:
       # On Windows, `dotnet run` execs the built apphost directly, so the actual
       # running process is named DownloadBot.exe, not dotnet.exe — kill both names
       # to cover it regardless of how it was last started.
+      #
+      # Asks nicely first (plain `taskkill`, no /F) so the host's ApplicationStopping
+      # hook gets to run — that's what posts the "Bot shutting down" Discord message.
+      # A hard Stop-Process/-Force kill skips that entirely. Only force-kills
+      # anything still alive after giving it a few seconds to shut down cleanly.
       - name: Stop DownloadBot
         shell: pwsh
         run: |
-          Get-CimInstance Win32_Process |
-            Where-Object { $_.Name -in @('DownloadBot.exe', 'dotnet.exe') -and $_.CommandLine -like "*DownloadBot*" } |
-            ForEach-Object {
-              Write-Host "Stopping $($_.Name) PID $($_.ProcessId)"
-              Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-            }
-          Start-Sleep -Seconds 2
+          function Get-DownloadBotProcesses {
+            Get-CimInstance Win32_Process |
+              Where-Object { $_.Name -in @('DownloadBot.exe', 'dotnet.exe') -and $_.CommandLine -like "*DownloadBot*" }
+          }
+
+          Get-DownloadBotProcesses | ForEach-Object {
+            Write-Host "Requesting graceful stop of $($_.Name) PID $($_.ProcessId)"
+            taskkill /PID $_.ProcessId | Out-Null
+          }
+
+          Start-Sleep -Seconds 5
+
+          Get-DownloadBotProcesses | ForEach-Object {
+            Write-Host "Still running — force-stopping $($_.Name) PID $($_.ProcessId)"
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Build
         shell: pwsh
