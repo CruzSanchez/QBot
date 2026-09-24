@@ -215,9 +215,9 @@ public sealed class DownloadBotService(
     private static readonly ApplicationCommandOptionChoiceProperties[] TypeChoices =
     [
         new ApplicationCommandOptionChoiceProperties { Name = "Movie", Value = "movie" },
-        new ApplicationCommandOptionChoiceProperties { Name = "TV", Value = "tv" },
+        new ApplicationCommandOptionChoiceProperties { Name = "TV Shows", Value = "tv" },
         new ApplicationCommandOptionChoiceProperties { Name = "Kids Movie", Value = "kids-movie" },
-        new ApplicationCommandOptionChoiceProperties { Name = "Kids TV", Value = "kids-tv" }
+        new ApplicationCommandOptionChoiceProperties { Name = "Kids TV Shows", Value = "kids-tv" }
     ];
 
     private async Task OnReadyAsync()
@@ -807,9 +807,15 @@ public sealed class DownloadBotService(
         }
     }
 
+    // TV shows tend to have far more scattered/duplicate releases (per-episode, per-season, remux vs
+    // web-dl, etc.) than movies, so a picker capped at 5 more often misses the release you actually
+    // want — 10 gives more room without approaching the select menu's 25-option limit.
+    private static readonly HashSet<string> TypesWithExpandedResults = new(StringComparer.OrdinalIgnoreCase) { "tv", "kids-tv" };
+
     private async Task PostPickerAsync(SocketSlashCommand command, string title, string type, IReadOnlyList<SearchResult> results)
     {
-        var top = results.Take(5).ToList();
+        var resultLimit = TypesWithExpandedResults.Contains(type) ? 10 : 5;
+        var top = results.Take(resultLimit).ToList();
 
         var menu = new SelectMenuBuilder()
             .WithCustomId("download-pick")
