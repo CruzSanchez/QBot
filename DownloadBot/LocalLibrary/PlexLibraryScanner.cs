@@ -14,7 +14,7 @@ public sealed class PlexLibraryScanner(ILogger<PlexLibraryScanner> logger) : IPl
 {
     private static readonly string[] CategoryFolders =
     [
-        "TV Shows", "Kids Shows", "Kids Tv Shows", "Movies", "Kids Movies"
+        "TV Shows", "Kids Shows", "Kids Tv Shows", "Movies", "Kids Movies", "Music"
     ];
 
     public Task<IReadOnlyList<string>> FindExistingAsync(string rawQuery) =>

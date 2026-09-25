@@ -40,9 +40,17 @@ place so the app builds and runs; fill in real values and re-check the box.
         "movie": "G:\\plex\\Movies",
         "tv": "G:\\plex\\TV Shows",
         "kids-movie": "G:\\plex\\Kids Movies",
-        "kids-tv": "G:\\plex\\Kids TV Shows"
+        "kids-tv": "G:\\plex\\Kids TV Shows",
+        "music": "G:\\plex\\Music"
       }
       ```
+      `music` (2026-09-24) is hardcoded to `G:` for now, same as the others — you
+      mentioned this will eventually need to work across whichever drive has room
+      (`*/plex/Music`) rather than always `G:`. That's not built yet: `SavePaths`
+      is a fixed path per type, unlike the library duplicate-check (`PlexLibraryScanner`),
+      which already scans every attached drive. Say the word if/when you want
+      `/download` to pick a drive dynamically for adds too — it's a real change
+      (some kind of drive-selection or free-space-based routing), not a config tweak.
 
 ## Architecture change (2026-09-20)
 

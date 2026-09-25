@@ -49,14 +49,15 @@ public sealed class DownloadBotService(
 
     private sealed record PendingSpaceConfirmation(SearchResult Picked, string Type);
 
-    // Prefixed onto the RSS item title so qBittorrent's Auto Downloading Rules can match by plain string
-    // instead of guessing content type from often-inconsistent torrent titles.
+    // Prefixed onto the title tracked in Discord/logs so content type is obvious at a glance instead
+    // of guessing from often-inconsistent torrent titles.
     private static readonly Dictionary<string, string> CategoryMarkers = new()
     {
         ["movie"] = "[DLBOT-MOVIE]",
         ["tv"] = "[DLBOT-TV]",
         ["kids-movie"] = "[DLBOT-KIDS-MOVIE]",
-        ["kids-tv"] = "[DLBOT-KIDS-TV]"
+        ["kids-tv"] = "[DLBOT-KIDS-TV]",
+        ["music"] = "[DLBOT-MUSIC]"
     };
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -217,7 +218,8 @@ public sealed class DownloadBotService(
         new ApplicationCommandOptionChoiceProperties { Name = "Movie", Value = "movie" },
         new ApplicationCommandOptionChoiceProperties { Name = "TV Shows", Value = "tv" },
         new ApplicationCommandOptionChoiceProperties { Name = "Kids Movie", Value = "kids-movie" },
-        new ApplicationCommandOptionChoiceProperties { Name = "Kids TV Shows", Value = "kids-tv" }
+        new ApplicationCommandOptionChoiceProperties { Name = "Kids TV Shows", Value = "kids-tv" },
+        new ApplicationCommandOptionChoiceProperties { Name = "Music", Value = "music" }
     ];
 
     private async Task OnReadyAsync()
@@ -510,7 +512,7 @@ public sealed class DownloadBotService(
             .WithTitle("Download bot — how to use it")
             .WithDescription("Search torrent indexers from Discord and queue a download for qBittorrent to pick up automatically.")
             .AddField("/download title type",
-                "Search for one title. Pick your `type` (Movie, TV, Kids Movie, Kids TV), " +
+                "Search for one title. Pick your `type` (Movie, TV Shows, Kids Movie, Kids TV Shows, Music), " +
                 "then choose the exact release from the dropdown of top results (or hit Cancel to back out).\n" +
                 "Example: `/download title:Dune Part Two type:movie`")
             .AddField("/download-many titles type",
