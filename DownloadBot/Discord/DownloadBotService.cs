@@ -596,7 +596,7 @@ public sealed class DownloadBotService(
         IReadOnlyList<string> matches;
         try
         {
-            matches = await libraryScanner.FindExistingAsync(title);
+            matches = await libraryScanner.FindExistingAsync(title, type);
         }
         catch (Exception ex)
         {
