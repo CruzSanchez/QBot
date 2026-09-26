@@ -198,6 +198,11 @@ pushing something else, or they'll be silently wiped on the next deploy.
   (default 25) via yt-dlp's own `--max-downloads`, so a huge/accidental
   playlist link can't run unbounded — anything past the cap is just not
   downloaded, no error.
+- **A private/deleted/age-restricted video partway through a playlist no
+  longer fails the whole download** (2026-09-27) — `--ignore-errors` skips
+  it and keeps going; the result is reported as a success listing whatever
+  did download, plus a note on how many were skipped. Only actually fails
+  if *nothing* in the playlist could be downloaded.
 - **`YtDlp:TimeoutMinutes`** (default 30) covers the *whole* invocation,
   including a full playlist — a large playlist near the 25-item cap may
   need a longer timeout than a single video would. Raise it if a playlist
@@ -227,3 +232,58 @@ pushing something else, or they'll be silently wiped on the next deploy.
   Youtube folder only (not other drives). `folder` autocompletes against
   real subfolders there; anything that doesn't resolve to an actual
   existing folder (including a `..\` traversal attempt) is rejected.
+
+## yt-dlp: cookies, download archive, SponsorBlock, retries (2026-09-27)
+
+- [ ] **Cookies (`YtDlp:CookiesFilePath`, blank by default)** — needed for
+      age-restricted, members-only, or private videos (the "Sign in to
+      confirm your age" errors from an earlier `/download-yt` run). This is
+      a manual, one-time setup, not something the bot can do itself:
+      1. Log into YouTube in a real browser (ideally a throwaway/dedicated
+         account, not your main one — this file is effectively a login
+         credential and should be treated that way).
+      2. Export cookies in Netscape format using a browser extension (e.g.
+         "Get cookies.txt LOCALLY") to a file on the server, e.g.
+         `C:\Users\johnb\Desktop\repos\cookies.txt`.
+      3. Set `YtDlp:CookiesFilePath` to that path.
+      4. Keep this file out of the repo — it already lives outside
+         `DownloadBot/` here, but double-check wherever you actually put
+         it isn't tracked by git.
+      Cookies expire/rotate periodically — if age-restricted downloads
+      start failing again later, re-export a fresh cookies.txt.
+- **Download archive (`YtDlp:DownloadArchivePath`, default
+  `data/yt-dlp-archive.txt`)** — every downloaded video ID gets logged
+  here permanently; re-running the same channel/playlist URL later only
+  grabs videos not already in the archive instead of re-downloading
+  everything. Gitignored along with the rest of `data/`. Delete the file
+  (or blank the setting) to reset it.
+- **SponsorBlock (`YtDlp:SponsorBlockRemoveCategories`, default
+  `"sponsor"`)** — segments in that category are cut from the downloaded
+  file using SponsorBlock's community-maintained database. Comma-separate
+  more categories (e.g. `"sponsor,selfpromo,interaction"`) or blank it to
+  disable entirely. If SponsorBlock's API is unreachable for a given
+  video, that video just downloads without any segments removed — it
+  doesn't fail the download.
+- **Retries (`YtDlp:Retries`, default `1`)** — applied to both
+  `--retries`/`--fragment-retries`, i.e. one extra attempt on a flaky
+  connection before it's reported as a real failure. Deliberately not
+  yt-dlp's own default of 10 (or "infinite") — raise it if downloads are
+  failing on transient network issues more than expected.
+
+## /download-yt now posts a separate status message (2026-09-27)
+
+Root cause found for progress appearing "stuck," and for a failure that
+never made it back to Discord ("Invalid Webhook Token"/"Interaction token
+no longer valid" in the logs): Discord invalidates an interaction's own
+webhook token after a while, so every `ModifyOriginalResponseAsync` call
+used for the live progress updates could silently fail once that happened
+— previously logged at Debug level, so it was invisible, and the embed
+just stayed on whatever its last successfully-applied state was (often
+still 0%) until the final update either landed in time or also failed.
+
+Fix: `/download-yt` now gives a quick **private** acknowledgment on the
+command itself, then posts a normal, bot-owned **public** message for all
+progress updates and the final result — that message has no expiration and
+is edited via the regular REST API, not the interaction's webhook. Any
+future update failure is now logged at Warning, not Debug, so it won't go
+unnoticed again.

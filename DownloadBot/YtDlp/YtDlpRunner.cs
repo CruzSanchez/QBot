@@ -65,6 +65,14 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
     {
         var opts = options.Value;
 
+        // yt-dlp creates the archive file itself if missing, but not its parent directory.
+        if (!string.IsNullOrWhiteSpace(opts.DownloadArchivePath))
+        {
+            var archiveDir = Path.GetDirectoryName(Path.GetFullPath(opts.DownloadArchivePath));
+            if (!string.IsNullOrEmpty(archiveDir))
+                Directory.CreateDirectory(archiveDir);
+        }
+
         var startInfo = new ProcessStartInfo
         {
             FileName = opts.ExecutablePath,
@@ -74,50 +82,8 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
             CreateNoWindow = true
         };
 
-        startInfo.ArgumentList.Add("-f");
-        startInfo.ArgumentList.Add(YtDlpFormatSelector.Build(quality, opts.DefaultMaxHeight));
-        startInfo.ArgumentList.Add("--merge-output-format");
-        startInfo.ArgumentList.Add(opts.MergeOutputFormat);
-        startInfo.ArgumentList.Add("--max-downloads");
-        startInfo.ArgumentList.Add(opts.MaxDownloadsPerInvocation.ToString());
-
-        // Cleans the title metadata itself (used below for both the default per-video folder name and
-        // the file name) down to the same allowed set FolderNameSanitizer enforces for user-typed
-        // folder names — letters, digits, spaces, '-', '_'. Without this, a title with a colon/comma/
-        // etc. still gets *some* yt-dlp-side substitution, but not necessarily one that plays nicely
-        // with Plex or looks clean. Order: strip disallowed chars to a space, collapse runs, trim ends.
-        startInfo.ArgumentList.Add("--replace-in-metadata");
-        startInfo.ArgumentList.Add("title");
-        startInfo.ArgumentList.Add(@"[^\w\s-]");
-        startInfo.ArgumentList.Add(" ");
-        startInfo.ArgumentList.Add("--replace-in-metadata");
-        startInfo.ArgumentList.Add("title");
-        startInfo.ArgumentList.Add(@"\s+");
-        startInfo.ArgumentList.Add(" ");
-        startInfo.ArgumentList.Add("--replace-in-metadata");
-        startInfo.ArgumentList.Add("title");
-        startInfo.ArgumentList.Add(@"^\s+|\s+$");
-        startInfo.ArgumentList.Add("");
-
-        startInfo.ArgumentList.Add("-o");
-        // Plex's scanners generally expect a video to sit in its own folder rather than a flat pile of
-        // files in one directory, or it may not show up in the library at all. Default (no folderName)
-        // gives each video its own folder named after its (now-sanitized) title; passing folderName
-        // instead groups several related videos together (e.g. as one Plex "show"/season).
-        var folderComponent = folderName is null ? "%(title)s" : FolderNameSanitizer.Sanitize(folderName).Sanitized;
-        startInfo.ArgumentList.Add(Path.Combine(destinationDirectory, folderComponent, "%(title)s.%(ext)s"));
-        startInfo.ArgumentList.Add("--print");
-        startInfo.ArgumentList.Add("after_move:filepath");
-        startInfo.ArgumentList.Add("--newline");
-        if (!string.IsNullOrWhiteSpace(opts.FfmpegLocation))
-        {
-            startInfo.ArgumentList.Add("--ffmpeg-location");
-            startInfo.ArgumentList.Add(opts.FfmpegLocation);
-        }
-        // Literal separator: without it, a URL string that happened to start with "-" could be
-        // parsed by yt-dlp as an option instead of a positional argument.
-        startInfo.ArgumentList.Add("--");
-        startInfo.ArgumentList.Add(url);
+        foreach (var arg in YtDlpArgumentBuilder.Build(url, destinationDirectory, folderName, quality, opts))
+            startInfo.ArgumentList.Add(arg);
 
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
 
@@ -137,6 +103,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
         var outputFilePaths = new List<string>();
         var stderrTail = new Queue<string>();
+        var skippedCount = 0;
 
         var stdoutTask = ReadStreamAsync(process.StandardOutput, line =>
         {
@@ -150,6 +117,11 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
             else if (line.StartsWith(destinationDirectory, StringComparison.OrdinalIgnoreCase))
             {
                 outputFilePaths.Add(line.Trim());
+            }
+            else if (line.Contains("has already been recorded", StringComparison.OrdinalIgnoreCase))
+            {
+                // Expected, benign --download-archive skip message for a video downloaded on a
+                // previous run — not an unrecognized-format case worth flagging below.
             }
             else if (line.Contains("[download]", StringComparison.Ordinal))
             {
@@ -165,6 +137,12 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
             stderrTail.Enqueue(line);
             while (stderrTail.Count > MaxStderrTailLines)
                 stderrTail.Dequeue();
+
+            // Each unavailable/private/restricted video in a playlist logs its own "ERROR: ..." line
+            // (that's --ignore-errors working as intended) — counted so the caller can say how many
+            // were skipped instead of just going quiet about it.
+            if (line.StartsWith("ERROR:", StringComparison.Ordinal))
+                skippedCount++;
         });
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -190,14 +168,27 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
         await Task.WhenAll(stdoutTask, stderrTask);
 
-        if (process.ExitCode != 0)
+        // yt-dlp's exit code reflects "at least one error happened," which --ignore-errors deliberately
+        // doesn't prevent — it only prevents one bad video from stopping the rest. So a nonzero exit
+        // code alongside actual downloaded files is a partial success (some playlist entries were
+        // unavailable), not a failure; only treat it as a real failure when nothing came out of it at all.
+        if (outputFilePaths.Count == 0)
         {
-            logger.LogWarning("yt-dlp exited with code {ExitCode} for {Url}", process.ExitCode, url);
+            logger.LogWarning("yt-dlp exited with code {ExitCode} for {Url} and produced no files", process.ExitCode, url);
             return new YtDlpResult(false, [], "yt-dlp exited with an error.", JoinTail(stderrTail));
         }
 
-        logger.LogInformation("yt-dlp finished for {Url}: {Count} file(s)", url, outputFilePaths.Count);
-        return new YtDlpResult(true, outputFilePaths, null, null);
+        if (process.ExitCode != 0)
+        {
+            logger.LogWarning("yt-dlp exited with code {ExitCode} for {Url} but {Count} file(s) still downloaded ({Skipped} skipped)",
+                process.ExitCode, url, outputFilePaths.Count, skippedCount);
+        }
+        else
+        {
+            logger.LogInformation("yt-dlp finished for {Url}: {Count} file(s)", url, outputFilePaths.Count);
+        }
+
+        return new YtDlpResult(true, outputFilePaths, null, null, skippedCount);
     }
 
     private static async Task ReadStreamAsync(StreamReader reader, Action<string> onLine)

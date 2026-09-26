@@ -46,8 +46,11 @@ second `/download-yt` queues behind one already running instead of running in
 parallel. Folder names only ever get letters, digits, spaces, `-`, or `_` —
 anything else is cleaned up automatically instead of erroring. `/rename-folder`
 renames an existing folder under the active drive's Youtube folder (autocompletes
-the folder to pick). See [CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg
-setup.
+the folder to pick). A private/deleted/restricted video partway through a
+playlist is skipped rather than failing the whole thing. Also configurable:
+cookies (for age-restricted content), a download archive (skips videos already
+grabbed on a previous run), SponsorBlock segment removal, and retry count — see
+[CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg setup and all of these.
 
 ## Setup
 
@@ -150,16 +153,17 @@ DownloadBot/
     ├── MagnetHash.cs                 // pulls the btih hash out of a magnet URI
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
 └── YtDlp/
-    ├── YtDlpOptions.cs                // executable/ffmpeg path overrides, default max height, timeout, max-downloads cap
+    ├── YtDlpOptions.cs                // executable/ffmpeg paths, quality/retry/archive/cookies/SponsorBlock defaults
     ├── YtDlpProgressParser.cs         // pure "[download] NN.N%" / "video X of Y" line parsing
     ├── YtDlpFormatSelector.cs         // pure quality-option -> -f format selector string
+    ├── YtDlpArgumentBuilder.cs        // pure full yt-dlp argument list assembly
     ├── FolderNameSanitizer.cs         // pure "letters/digits/spaces/-/_ only" folder-name cleanup
     ├── YoutubeFolderResolver.cs       // pure path-traversal-safe lookup of an existing Youtube subfolder
-    ├── YtDlpResult.cs                 // success/output-paths/error result
+    ├── YtDlpResult.cs                 // success/output-paths/skipped-count/error result
     ├── IYtDlpRunner.cs
-    └── YtDlpRunner.cs                 // shells out to yt-dlp via ArgumentList, streams progress, kills tree on timeout
+    └── YtDlpRunner.cs                 // runs the process, streams progress, kills tree on timeout
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector, FolderNameSanitizer, YoutubeFolderResolver
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector, YtDlpArgumentBuilder, FolderNameSanitizer, YoutubeFolderResolver
 └── Integration/                      // live Jackett/qBittorrent/Discord/yt-dlp checks, self-skipping
 ```

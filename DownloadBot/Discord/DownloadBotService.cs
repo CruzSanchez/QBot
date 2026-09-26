@@ -521,11 +521,17 @@ public sealed class DownloadBotService(
 
         try
         {
-            await command.DeferAsync();
+            // Ephemeral — the real, ongoing status goes to a separate bot-owned channel message below,
+            // not to this interaction response. Discord invalidates an interaction's own webhook token
+            // a while after it's created; a long download (or a playlist that runs into rate limits/
+            // retries) can easily outlive that, which showed up as "Invalid Webhook Token"/"Interaction
+            // token no longer valid" errors when trying to edit or post the final result. A plain
+            // channel message the bot edits via the normal REST API has no such expiry.
+            await command.DeferAsync(ephemeral: true);
 
             if (!activeDriveStore.TryGetSavePath("youtube", out var savePath))
             {
-                await command.FollowupAsync("No `youtube` save path configured for the active drive — check `QBittorrent:SavePaths`.");
+                await command.FollowupAsync("No `youtube` save path configured for the active drive — check `QBittorrent:SavePaths`.", ephemeral: true);
                 return;
             }
 
@@ -536,7 +542,7 @@ public sealed class DownloadBotService(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed to create youtube save directory {SavePath}", savePath);
-                await command.FollowupAsync($"Could not create the destination folder `{savePath}`: {ex.Message}");
+                await command.FollowupAsync($"Could not create the destination folder `{savePath}`: {ex.Message}", ephemeral: true);
                 return;
             }
 
@@ -555,6 +561,12 @@ public sealed class DownloadBotService(
             var downloadTask = ytDlp.DownloadAsync(url, savePath, folderName, quality, progress, () => hasStarted = true, cts.Token);
             var cancelButton = BuildDownloadYtCancelButton(requestId);
 
+            var statusMessage = await command.Channel.SendMessageAsync(
+                embed: BuildDownloadYtProgressEmbed(url, hasStarted, currentPercent, playlistIndex, playlistTotal),
+                components: cancelButton);
+
+            await command.FollowupAsync("▶️ Started — see the message below for live progress.", ephemeral: true);
+
             while (!downloadTask.IsCompleted)
             {
                 await Task.WhenAny(downloadTask, Task.Delay(TimeSpan.FromSeconds(5)));
@@ -562,7 +574,7 @@ public sealed class DownloadBotService(
                 var progressEmbed = BuildDownloadYtProgressEmbed(url, hasStarted, currentPercent, playlistIndex, playlistTotal);
                 try
                 {
-                    await command.ModifyOriginalResponseAsync(m =>
+                    await statusMessage.ModifyAsync(m =>
                     {
                         m.Embed = progressEmbed;
                         m.Components = cancelButton;
@@ -570,7 +582,10 @@ public sealed class DownloadBotService(
                 }
                 catch (Exception ex)
                 {
-                    logger.LogDebug(ex, "Failed to update /download-yt progress embed for {Url}", url);
+                    // Was previously logged at Debug (invisible by default) — a run of these failing
+                    // silently is exactly what made progress look "stuck" at its last successful value
+                    // instead of the real problem being visible in the logs.
+                    logger.LogWarning(ex, "Failed to update /download-yt progress message for {Url}", url);
                 }
             }
 
@@ -588,7 +603,7 @@ public sealed class DownloadBotService(
             var finalEmbed = result.Success
                 ? new EmbedBuilder()
                     .WithTitle("✅ Download complete")
-                    .WithDescription(FormatDownloadYtSuccess(result.OutputFilePaths, savePath))
+                    .WithDescription(FormatDownloadYtSuccess(result.OutputFilePaths, savePath, result.SkippedCount))
                     .WithColor(DashboardFormatter.GreenColor)
                     .Build()
                 : new EmbedBuilder()
@@ -597,7 +612,7 @@ public sealed class DownloadBotService(
                     .WithColor(DashboardFormatter.RedColor)
                     .Build();
 
-            await command.ModifyOriginalResponseAsync(m =>
+            await statusMessage.ModifyAsync(m =>
             {
                 m.Embed = finalEmbed;
                 m.Components = new ComponentBuilder().Build();
@@ -608,7 +623,7 @@ public sealed class DownloadBotService(
             logger.LogError(ex, "Failed to handle /download-yt for {Url}", url);
             try
             {
-                await command.FollowupAsync($"Something went wrong: {ex.Message}");
+                await command.FollowupAsync($"Something went wrong: {ex.Message}", ephemeral: true);
             }
             catch (Exception followupEx)
             {
@@ -762,18 +777,22 @@ public sealed class DownloadBotService(
             .Build();
     }
 
-    private static string FormatDownloadYtSuccess(IReadOnlyList<string> paths, string savePath)
+    private static string FormatDownloadYtSuccess(IReadOnlyList<string> paths, string savePath, int skippedCount)
     {
+        var skippedNote = skippedCount > 0
+            ? $"\n⚠️ {skippedCount} video(s) in the playlist were skipped (private, deleted, or restricted)."
+            : "";
+
         if (paths.Count == 0)
-            return $"Saved to `{savePath}` (exact filename not confirmed).";
+            return $"Saved to `{savePath}` (exact filename not confirmed).{skippedNote}";
 
         if (paths.Count == 1)
-            return $"Saved to `{paths[0]}`";
+            return $"Saved to `{paths[0]}`{skippedNote}";
 
         const int maxListed = 5;
         var listed = paths.Take(maxListed).Select(p => $"• `{Path.GetFileName(p)}`");
         var suffix = paths.Count > maxListed ? $"\n…and {paths.Count - maxListed} more" : "";
-        return $"Saved {paths.Count} files to `{savePath}`:\n{string.Join('\n', listed)}{suffix}";
+        return $"Saved {paths.Count} files to `{savePath}`:\n{string.Join('\n', listed)}{suffix}{skippedNote}";
     }
 
     // Posts the same embed the live dashboard shows and self-edits it every few seconds for about a
@@ -971,10 +990,12 @@ public sealed class DownloadBotService(
             .AddField("/download-yt url addtofolder newfoldername quality",
                 "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
                 "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
-                "as-is. Shows live progress. If another /download-yt is already running, yours queues " +
-                "behind it instead of running at the same time. Every progress message has a **Cancel** " +
-                "button — works whether that download is actively running or still queued, and anyone " +
-                "can use it, not just whoever started it.\n" +
+                "as-is. You get a quick private acknowledgment, then a separate public message below " +
+                "shows live progress (this avoids a Discord limitation where very long downloads would " +
+                "otherwise stop being able to update). If another /download-yt is already running, " +
+                "yours queues behind it instead of running at the same time. Every progress message has " +
+                "a **Cancel** button — works whether that download is actively running or still queued, " +
+                "and anyone can use it, not just whoever started it.\n" +
                 "By default each video gets its own folder (named after its title) — Plex generally " +
                 "wants that instead of a flat pile of files. To instead group several related videos " +
                 "into one shared folder (e.g. a montage series acting as one Plex show), pass either " +
