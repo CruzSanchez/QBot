@@ -84,6 +84,7 @@ public sealed class DownloadBotService(
         client.SlashCommandExecuted += command => FireAndForget(() => OnSlashCommandExecutedAsync(command), "SlashCommandExecuted");
         client.SelectMenuExecuted += component => FireAndForget(() => OnSelectMenuExecutedAsync(component), "SelectMenuExecuted");
         client.ButtonExecuted += component => FireAndForget(() => OnButtonExecutedAsync(component), "ButtonExecuted");
+        client.AutocompleteExecuted += interaction => FireAndForget(() => OnAutocompleteExecutedAsync(interaction), "AutocompleteExecuted");
 
         var token = options.Value.Token;
         if (string.IsNullOrWhiteSpace(token))
@@ -292,6 +293,10 @@ public sealed class DownloadBotService(
             .WithName("download-yt")
             .WithDescription("Download a video (or playlist) via yt-dlp and save it to disk")
             .AddOption("url", ApplicationCommandOptionType.String, "Video or playlist URL", isRequired: true)
+            .AddOption("addtofolder", ApplicationCommandOptionType.String,
+                "Add to an existing folder — start typing to search", isRequired: false, isAutocomplete: true)
+            .AddOption("newfoldername", ApplicationCommandOptionType.String,
+                "Create a new folder with this name and add it there", isRequired: false)
             .Build();
 
         try
@@ -469,7 +474,20 @@ public sealed class DownloadBotService(
     private async Task HandleDownloadYtAsync(SocketSlashCommand command)
     {
         var url = (string)command.Data.Options.First(o => o.Name == "url").Value;
-        logger.LogInformation("/download-yt invoked by {User}: url={Url}", command.User.Username, url);
+        var addToFolder = command.Data.Options.FirstOrDefault(o => o.Name == "addtofolder")?.Value as string;
+        var newFolderName = command.Data.Options.FirstOrDefault(o => o.Name == "newfoldername")?.Value as string;
+
+        if (!string.IsNullOrWhiteSpace(addToFolder) && !string.IsNullOrWhiteSpace(newFolderName))
+        {
+            await command.RespondAsync("Use either `addtofolder` or `newfoldername`, not both.", ephemeral: true);
+            return;
+        }
+
+        var folderName = !string.IsNullOrWhiteSpace(newFolderName) ? newFolderName
+            : !string.IsNullOrWhiteSpace(addToFolder) ? addToFolder
+            : null;
+
+        logger.LogInformation("/download-yt invoked by {User}: url={Url} folder={Folder}", command.User.Username, url, folderName ?? "(none)");
 
         var requestId = Guid.NewGuid();
         using var cts = new CancellationTokenSource();
@@ -508,7 +526,7 @@ public sealed class DownloadBotService(
                 playlistTotal = p.PlaylistTotal;
             });
 
-            var downloadTask = ytDlp.DownloadAsync(url, savePath, progress, () => hasStarted = true, cts.Token);
+            var downloadTask = ytDlp.DownloadAsync(url, savePath, folderName, progress, () => hasStarted = true, cts.Token);
             var cancelButton = BuildDownloadYtCancelButton(requestId);
 
             while (!downloadTask.IsCompleted)
@@ -594,6 +612,52 @@ public sealed class DownloadBotService(
         }
 
         return component.DeferAsync();
+    }
+
+    // /download-yt's addtofolder option — live folder list instead of a fixed dropdown, since the
+    // folder list changes every time someone creates one via newfoldername and could grow past
+    // Discord's 25-choice cap on a plain dropdown. Scoped to the active drive's Youtube folder, same
+    // as where the download will actually land.
+    private async Task OnAutocompleteExecutedAsync(SocketAutocompleteInteraction interaction)
+    {
+        try
+        {
+            if (interaction.Data.CommandName != "download-yt" || interaction.Data.Current.Name != "addtofolder")
+            {
+                await interaction.RespondAsync([]);
+                return;
+            }
+
+            var partial = interaction.Data.Current.Value as string ?? "";
+
+            if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath) || !Directory.Exists(youtubePath))
+            {
+                await interaction.RespondAsync([]);
+                return;
+            }
+
+            var matches = Directory.GetDirectories(youtubePath)
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrEmpty(name) && name.Contains(partial, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .Take(25)
+                .Select(name => new AutocompleteResult(name!, name!));
+
+            await interaction.RespondAsync(matches);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to handle autocomplete for {Command}/{Option}",
+                interaction.Data.CommandName, interaction.Data.Current?.Name);
+            try
+            {
+                await interaction.RespondAsync([]);
+            }
+            catch (Exception respondEx)
+            {
+                logger.LogError(respondEx, "Also failed to send an empty autocomplete response");
+            }
+        }
     }
 
     private static Embed BuildDownloadYtProgressEmbed(string url, bool hasStarted, double percent, int? playlistIndex, int? playlistTotal)
@@ -816,13 +880,19 @@ public sealed class DownloadBotService(
                 "Shows free space on each configured drive and lets you pick which one new /download " +
                 "adds are saved to (they all mirror the same folder layout, just under a different " +
                 "letter). Doesn't move or affect anything already downloading.")
-            .AddField("/download-yt url",
+            .AddField("/download-yt url addtofolder newfoldername",
                 "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
                 "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
                 "as-is. Shows live progress. If another /download-yt is already running, yours queues " +
                 "behind it instead of running at the same time. Every progress message has a **Cancel** " +
                 "button — works whether that download is actively running or still queued, and anyone " +
-                "can use it, not just whoever started it.")
+                "can use it, not just whoever started it.\n" +
+                "By default each video gets its own folder (named after its title) — Plex generally " +
+                "wants that instead of a flat pile of files. To instead group several related videos " +
+                "into one shared folder (e.g. a montage series acting as one Plex show), pass either " +
+                "`addtofolder` (pick an existing folder — start typing to search) or `newfoldername` " +
+                "(create one) — not both.\n" +
+                "Example: `/download-yt url:<link> newfoldername:Rocket League Montage`")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +

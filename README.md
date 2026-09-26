@@ -36,9 +36,13 @@ or remove them.
 `/download-yt url:<link>` is a separate pipeline: it shells out to
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) to download a video or playlist (YouTube
 and hundreds of other sites) and saves it to the active drive's Youtube folder —
-no Jackett/qBittorrent involved. Shows live progress; a second `/download-yt`
-queues behind one already running instead of running in parallel. See
-[CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg setup.
+no Jackett/qBittorrent involved. Each video gets its own folder (named after its
+title) by default, since Plex generally won't pick up a flat pile of video files —
+pass `folder:<name>` to instead group several related videos into one shared
+folder (e.g. a montage series acting as one Plex show). Shows live progress with
+a Cancel button; a second `/download-yt` queues behind one already running
+instead of running in parallel. See [CLARIFICATIONS.md](CLARIFICATIONS.md) for
+yt-dlp/ffmpeg setup.
 
 ## Setup
 

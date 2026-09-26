@@ -23,6 +23,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
     public async Task<YtDlpResult> DownloadAsync(
         string url,
         string destinationDirectory,
+        string? folderName,
         IProgress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>? progress,
         Action? onStarted,
         CancellationToken cancellationToken)
@@ -44,7 +45,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
         try
         {
-            return await RunAsync(url, destinationDirectory, progress, onStarted, cancellationToken);
+            return await RunAsync(url, destinationDirectory, folderName, progress, onStarted, cancellationToken);
         }
         finally
         {
@@ -55,6 +56,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
     private async Task<YtDlpResult> RunAsync(
         string url,
         string destinationDirectory,
+        string? folderName,
         IProgress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>? progress,
         Action? onStarted,
         CancellationToken cancellationToken)
@@ -77,7 +79,12 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         startInfo.ArgumentList.Add("--max-downloads");
         startInfo.ArgumentList.Add(opts.MaxDownloadsPerInvocation.ToString());
         startInfo.ArgumentList.Add("-o");
-        startInfo.ArgumentList.Add(Path.Combine(destinationDirectory, "%(title)s.%(ext)s"));
+        // Plex's scanners generally expect a video to sit in its own folder rather than a flat pile of
+        // files in one directory, or it may not show up in the library at all. Default (no folderName)
+        // gives each video its own folder named after its title; passing folderName instead groups
+        // several related videos together (e.g. as one Plex "show"/season).
+        var folderComponent = folderName is null ? "%(title)s" : SanitizeFolderName(folderName);
+        startInfo.ArgumentList.Add(Path.Combine(destinationDirectory, folderComponent, "%(title)s.%(ext)s"));
         startInfo.ArgumentList.Add("--print");
         startInfo.ArgumentList.Add("after_move:filepath");
         startInfo.ArgumentList.Add("--newline");
@@ -200,4 +207,15 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
     private static string? JoinTail(Queue<string> lines) =>
         lines.Count == 0 ? null : string.Join('\n', lines);
+
+    // folderName comes straight from a Discord user and ends up as a path component passed to an
+    // external process — strip path separators and any other filename-invalid characters so it can
+    // only ever be a single flat folder name, never a way to escape destinationDirectory (e.g. via
+    // "..\..\Windows") or inject additional path segments.
+    private static string SanitizeFolderName(string folderName)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string(folderName.Where(c => !invalid.Contains(c)).ToArray()).Trim(' ', '.');
+        return string.IsNullOrWhiteSpace(cleaned) ? "%(title)s" : cleaned;
+    }
 }
