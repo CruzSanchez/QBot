@@ -114,6 +114,13 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
             {
                 outputFilePaths.Add(line.Trim());
             }
+            else if (line.Contains("[download]", StringComparison.Ordinal))
+            {
+                // A "[download]" line that isn't a recognized progress/playlist/output-path line —
+                // logged so an unexpected yt-dlp output format shows up here instead of just looking
+                // like frozen progress.
+                logger.LogInformation("yt-dlp line not recognized as progress: {Line}", line);
+            }
         });
 
         var stderrTask = ReadStreamAsync(process.StandardError, line =>

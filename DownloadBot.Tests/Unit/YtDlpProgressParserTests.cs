@@ -9,6 +9,7 @@ public class YtDlpProgressParserTests
     [InlineData("[download] 100.0% of 10.00MiB in 00:08", 100.0)]
     [InlineData("[download]   0.0% of 10.00MiB at  Unknown B/s ETA Unknown", 0.0)]
     [InlineData("   [download]  55.5% of ~ 20.00MiB at  500.00KiB/s ETA 00:20", 55.5)] // leading whitespace
+    [InlineData("[download] \u001b[0;94m 42.3\u001b[0m% of \u001b[0;32m 10.00MiB\u001b[0m at 1.21MiB/s ETA 00:07", 42.3)] // ANSI-colorized
     public void TryParsePercent_ParsesProgressLines(string line, double expected)
     {
         Assert.Equal(expected, YtDlpProgressParser.TryParsePercent(line));

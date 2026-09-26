@@ -7,6 +7,13 @@ namespace DownloadBot.YtDlp;
 // carries one. Pure and I/O-free so it's directly unit-testable without a real process.
 public static partial class YtDlpProgressParser
 {
+    // yt-dlp colorizes progress output by default (even when redirected/piped, depending on version
+    // and terminal detection), which inserts ANSI escape sequences like "\x1b[0;94m" around the
+    // percentage — strip these before matching, otherwise the regexes below silently never match and
+    // progress looks frozen even though the download is genuinely proceeding.
+    [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]", RegexOptions.CultureInvariant)]
+    private static partial Regex AnsiEscapePattern();
+
     // e.g. "[download]  42.3% of   10.00MiB at    1.21MiB/s ETA 00:07"
     [GeneratedRegex(@"^\[download\]\s+([\d.]+)%", RegexOptions.CultureInvariant)]
     private static partial Regex PercentPattern();
@@ -17,7 +24,7 @@ public static partial class YtDlpProgressParser
 
     public static double? TryParsePercent(string line)
     {
-        var match = PercentPattern().Match(line.TrimStart());
+        var match = PercentPattern().Match(Clean(line));
         if (!match.Success)
             return null;
 
@@ -28,7 +35,7 @@ public static partial class YtDlpProgressParser
 
     public static (int Index, int Total)? TryParsePlaylistPosition(string line)
     {
-        var match = PlaylistPositionPattern().Match(line.TrimStart());
+        var match = PlaylistPositionPattern().Match(Clean(line));
         if (!match.Success)
             return null;
 
@@ -37,4 +44,6 @@ public static partial class YtDlpProgressParser
 
         return null;
     }
+
+    private static string Clean(string line) => AnsiEscapePattern().Replace(line, "").TrimStart();
 }
