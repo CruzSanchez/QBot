@@ -43,7 +43,11 @@ pass `addtofolder` (autocompletes against existing folders) or `newfoldername`
 series acting as one Plex show). `quality` caps the resolution (1080p by default,
 or 4K/720p/best available uncapped). Shows live progress with a Cancel button; a
 second `/download-yt` queues behind one already running instead of running in
-parallel. See [CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg setup.
+parallel. Folder names only ever get letters, digits, spaces, `-`, or `_` —
+anything else is cleaned up automatically instead of erroring. `/rename-folder`
+renames an existing folder under the active drive's Youtube folder (autocompletes
+the folder to pick). See [CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg
+setup.
 
 ## Setup
 
@@ -149,11 +153,13 @@ DownloadBot/
     ├── YtDlpOptions.cs                // executable/ffmpeg path overrides, default max height, timeout, max-downloads cap
     ├── YtDlpProgressParser.cs         // pure "[download] NN.N%" / "video X of Y" line parsing
     ├── YtDlpFormatSelector.cs         // pure quality-option -> -f format selector string
+    ├── FolderNameSanitizer.cs         // pure "letters/digits/spaces/-/_ only" folder-name cleanup
+    ├── YoutubeFolderResolver.cs       // pure path-traversal-safe lookup of an existing Youtube subfolder
     ├── YtDlpResult.cs                 // success/output-paths/error result
     ├── IYtDlpRunner.cs
     └── YtDlpRunner.cs                 // shells out to yt-dlp via ArgumentList, streams progress, kills tree on timeout
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector, FolderNameSanitizer, YoutubeFolderResolver
 └── Integration/                      // live Jackett/qBittorrent/Discord/yt-dlp checks, self-skipping
 ```

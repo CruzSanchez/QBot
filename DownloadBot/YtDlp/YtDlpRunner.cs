@@ -80,12 +80,31 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         startInfo.ArgumentList.Add(opts.MergeOutputFormat);
         startInfo.ArgumentList.Add("--max-downloads");
         startInfo.ArgumentList.Add(opts.MaxDownloadsPerInvocation.ToString());
+
+        // Cleans the title metadata itself (used below for both the default per-video folder name and
+        // the file name) down to the same allowed set FolderNameSanitizer enforces for user-typed
+        // folder names — letters, digits, spaces, '-', '_'. Without this, a title with a colon/comma/
+        // etc. still gets *some* yt-dlp-side substitution, but not necessarily one that plays nicely
+        // with Plex or looks clean. Order: strip disallowed chars to a space, collapse runs, trim ends.
+        startInfo.ArgumentList.Add("--replace-in-metadata");
+        startInfo.ArgumentList.Add("title");
+        startInfo.ArgumentList.Add(@"[^\w\s-]");
+        startInfo.ArgumentList.Add(" ");
+        startInfo.ArgumentList.Add("--replace-in-metadata");
+        startInfo.ArgumentList.Add("title");
+        startInfo.ArgumentList.Add(@"\s+");
+        startInfo.ArgumentList.Add(" ");
+        startInfo.ArgumentList.Add("--replace-in-metadata");
+        startInfo.ArgumentList.Add("title");
+        startInfo.ArgumentList.Add(@"^\s+|\s+$");
+        startInfo.ArgumentList.Add("");
+
         startInfo.ArgumentList.Add("-o");
         // Plex's scanners generally expect a video to sit in its own folder rather than a flat pile of
         // files in one directory, or it may not show up in the library at all. Default (no folderName)
-        // gives each video its own folder named after its title; passing folderName instead groups
-        // several related videos together (e.g. as one Plex "show"/season).
-        var folderComponent = folderName is null ? "%(title)s" : SanitizeFolderName(folderName);
+        // gives each video its own folder named after its (now-sanitized) title; passing folderName
+        // instead groups several related videos together (e.g. as one Plex "show"/season).
+        var folderComponent = folderName is null ? "%(title)s" : FolderNameSanitizer.Sanitize(folderName).Sanitized;
         startInfo.ArgumentList.Add(Path.Combine(destinationDirectory, folderComponent, "%(title)s.%(ext)s"));
         startInfo.ArgumentList.Add("--print");
         startInfo.ArgumentList.Add("after_move:filepath");
@@ -209,15 +228,4 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
     private static string? JoinTail(Queue<string> lines) =>
         lines.Count == 0 ? null : string.Join('\n', lines);
-
-    // folderName comes straight from a Discord user and ends up as a path component passed to an
-    // external process — strip path separators and any other filename-invalid characters so it can
-    // only ever be a single flat folder name, never a way to escape destinationDirectory (e.g. via
-    // "..\..\Windows") or inject additional path segments.
-    private static string SanitizeFolderName(string folderName)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var cleaned = new string(folderName.Where(c => !invalid.Contains(c)).ToArray()).Trim(' ', '.');
-        return string.IsNullOrWhiteSpace(cleaned) ? "%(title)s" : cleaned;
-    }
 }

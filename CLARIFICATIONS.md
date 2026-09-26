@@ -214,3 +214,16 @@ pushing something else, or they'll be silently wiped on the next deploy.
   (default), 4K, 720p, or best available uncapped. Defaults to
   `YtDlp:DefaultMaxHeight` (1080) when left blank. Always merges into mp4
   (`YtDlp:MergeOutputFormat`) — no audio-only option on the command itself.
+- **Folder names are restricted to letters, digits, spaces, `-`, and `_`**
+  (2026-09-27) — anything else (a video title with a colon/comma/etc., or a
+  user typing one into `newfoldername`/`/rename-folder`) gets automatically
+  replaced with a space rather than rejected. This applies to: the
+  default per-video folder name (via yt-dlp's own `--replace-in-metadata`
+  on the title), `addtofolder`/`newfoldername`, and `/rename-folder`'s new
+  name. `/rename-folder` tells you when it had to clean up what you typed;
+  `/download-yt` doesn't currently surface that same notice for
+  `newfoldername` — say so if you want it to.
+- **`/rename-folder`** — renames a folder under the *active drive's*
+  Youtube folder only (not other drives). `folder` autocompletes against
+  real subfolders there; anything that doesn't resolve to an actual
+  existing folder (including a `..\` traversal attempt) is rejected.

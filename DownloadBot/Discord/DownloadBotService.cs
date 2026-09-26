@@ -309,6 +309,14 @@ public sealed class DownloadBotService(
                 "Max resolution — defaults to 1080p (or best available below it)", isRequired: false, choices: qualityChoices)
             .Build();
 
+        var renameFolderCommand = new SlashCommandBuilder()
+            .WithName("rename-folder")
+            .WithDescription("Rename a folder under the active drive's Youtube folder")
+            .AddOption("folder", ApplicationCommandOptionType.String,
+                "Folder to rename — start typing to search", isRequired: true, isAutocomplete: true)
+            .AddOption("newname", ApplicationCommandOptionType.String, "New name for the folder", isRequired: true)
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -322,6 +330,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(statusCommand, guildId);
                 await client.Rest.CreateGuildCommand(switchDriveCommand, guildId);
                 await client.Rest.CreateGuildCommand(downloadYtCommand, guildId);
+                await client.Rest.CreateGuildCommand(renameFolderCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -335,6 +344,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(statusCommand);
                 await client.Rest.CreateGlobalCommand(switchDriveCommand);
                 await client.Rest.CreateGlobalCommand(downloadYtCommand);
+                await client.Rest.CreateGlobalCommand(renameFolderCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -399,6 +409,9 @@ public sealed class DownloadBotService(
                 break;
             case "download-yt":
                 await HandleDownloadYtAsync(command);
+                break;
+            case "rename-folder":
+                await HandleRenameFolderAsync(command);
                 break;
         }
     }
@@ -608,6 +621,64 @@ public sealed class DownloadBotService(
         }
     }
 
+    private async Task HandleRenameFolderAsync(SocketSlashCommand command)
+    {
+        var folder = (string)command.Data.Options.First(o => o.Name == "folder").Value;
+        var newName = (string)command.Data.Options.First(o => o.Name == "newname").Value;
+
+        logger.LogInformation("/rename-folder invoked by {User}: folder={Folder} newname={NewName}",
+            command.User.Username, folder, newName);
+
+        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath))
+        {
+            await command.RespondAsync("No `youtube` save path configured for the active drive — check `QBittorrent:SavePaths`.", ephemeral: true);
+            return;
+        }
+
+        var sourcePath = YoutubeFolderResolver.ResolveExisting(youtubePath, folder);
+        if (sourcePath is null)
+        {
+            await command.RespondAsync($"Couldn't find a folder named `{folder}` under the active drive's Youtube folder.", ephemeral: true);
+            return;
+        }
+
+        var (sanitizedName, wasChanged) = FolderNameSanitizer.Sanitize(newName);
+        var destinationPath = Path.Combine(youtubePath, sanitizedName);
+
+        if (string.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase))
+        {
+            await command.RespondAsync($"`{Path.GetFileName(sourcePath)}` is already named that.", ephemeral: true);
+            return;
+        }
+
+        if (Directory.Exists(destinationPath))
+        {
+            await command.RespondAsync($"A folder named `{sanitizedName}` already exists — pick a different name.", ephemeral: true);
+            return;
+        }
+
+        try
+        {
+            Directory.Move(sourcePath, destinationPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to rename folder {Source} to {Destination}", sourcePath, destinationPath);
+            await command.RespondAsync($"Failed to rename that folder: {ex.Message}", ephemeral: true);
+            return;
+        }
+
+        logger.LogInformation("User {User} renamed \"{Old}\" to \"{New}\"",
+            command.User.Username, Path.GetFileName(sourcePath), sanitizedName);
+
+        var message = wasChanged
+            ? $"✅ Renamed to `{sanitizedName}` — some characters you typed aren't allowed in folder names, so they were replaced."
+            : $"✅ Renamed to `{sanitizedName}`.";
+
+        await command.RespondAsync(message, ephemeral: true);
+    }
+
+
     private static MessageComponent BuildDownloadYtCancelButton(Guid requestId) =>
         new ComponentBuilder().WithButton("Cancel", $"download-yt-cancel:{requestId}", ButtonStyle.Danger).Build();
 
@@ -627,15 +698,18 @@ public sealed class DownloadBotService(
         return component.DeferAsync();
     }
 
-    // /download-yt's addtofolder option — live folder list instead of a fixed dropdown, since the
-    // folder list changes every time someone creates one via newfoldername and could grow past
-    // Discord's 25-choice cap on a plain dropdown. Scoped to the active drive's Youtube folder, same
-    // as where the download will actually land.
+    // Live folder list instead of a fixed dropdown, since the folder list changes every time someone
+    // creates one (via newfoldername or /rename-folder) and could grow past Discord's 25-choice cap on
+    // a plain dropdown. Scoped to the active drive's Youtube folder. Shared by /download-yt's
+    // addtofolder option and /rename-folder's folder option.
+    private static readonly HashSet<(string Command, string Option)> YoutubeFolderAutocompleteTargets =
+        new() { ("download-yt", "addtofolder"), ("rename-folder", "folder") };
+
     private async Task OnAutocompleteExecutedAsync(SocketAutocompleteInteraction interaction)
     {
         try
         {
-            if (interaction.Data.CommandName != "download-yt" || interaction.Data.Current.Name != "addtofolder")
+            if (!YoutubeFolderAutocompleteTargets.Contains((interaction.Data.CommandName, interaction.Data.Current.Name)))
             {
                 await interaction.RespondAsync([]);
                 return;
@@ -873,7 +947,8 @@ public sealed class DownloadBotService(
                 "Search for several titles at once, separated by commas (or newlines). " +
                 "You get a separate picker for each title, so you still choose the exact release for every one.\n" +
                 "Example: `/download-many titles:Bluey, Paw Patrol type:kids-tv`\n" +
-                "Limit: 20 titles per command.")
+                "Limit: 20 titles per command — anything past that is dropped, and you'll get a " +
+                "summary listing which ones so you can run them separately.")
             .AddField("Already-in-library check",
                 "Before searching, the bot checks the Plex library folders for a matching title/year. " +
                 "If found, it asks you to confirm before searching anyway instead of blocking you outright.")
@@ -906,8 +981,14 @@ public sealed class DownloadBotService(
                 "`addtofolder` (pick an existing folder — start typing to search) or `newfoldername` " +
                 "(create one) — not both.\n" +
                 "`quality` picks a max resolution — 1080p, 4K, 720p, or best available uncapped. " +
-                "Defaults to 1080p (or the best available below it) if left blank.\n" +
+                "Defaults to 1080p (or the best available below it) if left blank. Folder names only " +
+                "ever get letters, digits, spaces, `-`, or `_` — anything else typed (or in a video's " +
+                "title) gets replaced automatically, no error.\n" +
                 "Example: `/download-yt url:<link> newfoldername:Rocket League Montage quality:4K`")
+            .AddField("/rename-folder folder newname",
+                "Renames a folder under the active drive's Youtube folder. Pick the folder (start " +
+                "typing to search) and type the new name — same character rules as above apply, so an " +
+                "invalid name just gets cleaned up automatically instead of failing.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
@@ -1375,11 +1456,15 @@ public sealed class DownloadBotService(
         var titlesRaw = (string)command.Data.Options.First(o => o.Name == "titles").Value;
         var type = (string)command.Data.Options.First(o => o.Name == "type").Value;
 
-        var titles = titlesRaw
+        const int maxTitles = 20; // guard against pasting an enormous list into one command
+
+        var distinctTitles = titlesRaw
             .Split([',', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(20) // guard against pasting an enormous list into one command
             .ToList();
+
+        var titles = distinctTitles.Take(maxTitles).ToList();
+        var droppedTitles = distinctTitles.Skip(maxTitles).ToList();
 
         if (titles.Count == 0)
         {
@@ -1425,7 +1510,7 @@ public sealed class DownloadBotService(
             pickersPosted++;
         }
 
-        if (notFound.Count > 0 || failed.Count > 0 || needsConfirmation.Count > 0)
+        if (notFound.Count > 0 || failed.Count > 0 || needsConfirmation.Count > 0 || droppedTitles.Count > 0)
         {
             var summary = new EmbedBuilder().WithTitle($"Posted {pickersPosted} picker(s) — some titles need attention");
             if (needsConfirmation.Count > 0)
@@ -1434,6 +1519,9 @@ public sealed class DownloadBotService(
                 summary.AddField("No results", string.Join('\n', notFound.Select(t => $"❌ {t}")).Truncate(1024));
             if (failed.Count > 0)
                 summary.AddField("Search failed", string.Join('\n', failed.Select(t => $"⚠️ {t}")).Truncate(1024));
+            if (droppedTitles.Count > 0)
+                summary.AddField($"Dropped — over the {maxTitles}-title limit",
+                    string.Join('\n', droppedTitles.Select(t => $"🚫 {t}")).Truncate(1024));
 
             await command.FollowupAsync(embed: summary.Build());
         }
