@@ -10,8 +10,10 @@ public sealed class YtDlpOptions
     // containing folder). Leave blank to let yt-dlp find ffmpeg on PATH itself.
     public string FfmpegLocation { get; set; } = "";
 
-    // yt-dlp -f format selector. Best video+audio, falling back to best combined stream.
-    public string Format { get; set; } = "bestvideo*+bestaudio/best";
+    // Resolution cap applied when /download-yt's "quality" option is left unset — 1080p unless
+    // explicitly raised (e.g. to 4K) per download. YtDlpRunner builds the actual -f format selector
+    // from this plus whatever the command was given.
+    public int DefaultMaxHeight { get; set; } = 1080;
 
     // Container yt-dlp remuxes/merges into via --merge-output-format.
     public string MergeOutputFormat { get; set; } = "mp4";

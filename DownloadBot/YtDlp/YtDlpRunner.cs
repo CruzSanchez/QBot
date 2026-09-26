@@ -24,6 +24,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         string url,
         string destinationDirectory,
         string? folderName,
+        string? quality,
         IProgress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>? progress,
         Action? onStarted,
         CancellationToken cancellationToken)
@@ -45,7 +46,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
         try
         {
-            return await RunAsync(url, destinationDirectory, folderName, progress, onStarted, cancellationToken);
+            return await RunAsync(url, destinationDirectory, folderName, quality, progress, onStarted, cancellationToken);
         }
         finally
         {
@@ -57,6 +58,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         string url,
         string destinationDirectory,
         string? folderName,
+        string? quality,
         IProgress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>? progress,
         Action? onStarted,
         CancellationToken cancellationToken)
@@ -73,7 +75,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         };
 
         startInfo.ArgumentList.Add("-f");
-        startInfo.ArgumentList.Add(opts.Format);
+        startInfo.ArgumentList.Add(YtDlpFormatSelector.Build(quality, opts.DefaultMaxHeight));
         startInfo.ArgumentList.Add("--merge-output-format");
         startInfo.ArgumentList.Add(opts.MergeOutputFormat);
         startInfo.ArgumentList.Add("--max-downloads");

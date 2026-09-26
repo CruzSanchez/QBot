@@ -210,6 +210,7 @@ pushing something else, or they'll be silently wiped on the next deploy.
 - Downloads are **disk-only** — saved to the active drive's Youtube folder,
   never posted back as a Discord attachment (Discord's upload size limits
   make that impractical for anything beyond a very short clip).
-- Format is fixed to best-available video+audio merged into mp4
-  (`YtDlp:Format`/`YtDlp:MergeOutputFormat`) — no per-download quality or
-  audio-only option on the command itself.
+- **`quality`** (2026-09-27) picks a max resolution per download — 1080p
+  (default), 4K, 720p, or best available uncapped. Defaults to
+  `YtDlp:DefaultMaxHeight` (1080) when left blank. Always merges into mp4
+  (`YtDlp:MergeOutputFormat`) — no audio-only option on the command itself.

@@ -38,11 +38,12 @@ or remove them.
 and hundreds of other sites) and saves it to the active drive's Youtube folder —
 no Jackett/qBittorrent involved. Each video gets its own folder (named after its
 title) by default, since Plex generally won't pick up a flat pile of video files —
-pass `folder:<name>` to instead group several related videos into one shared
-folder (e.g. a montage series acting as one Plex show). Shows live progress with
-a Cancel button; a second `/download-yt` queues behind one already running
-instead of running in parallel. See [CLARIFICATIONS.md](CLARIFICATIONS.md) for
-yt-dlp/ffmpeg setup.
+pass `addtofolder` (autocompletes against existing folders) or `newfoldername`
+(creates one) to instead group several related videos together (e.g. a montage
+series acting as one Plex show). `quality` caps the resolution (1080p by default,
+or 4K/720p/best available uncapped). Shows live progress with a Cancel button; a
+second `/download-yt` queues behind one already running instead of running in
+parallel. See [CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg setup.
 
 ## Setup
 
@@ -145,13 +146,14 @@ DownloadBot/
     ├── MagnetHash.cs                 // pulls the btih hash out of a magnet URI
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
 └── YtDlp/
-    ├── YtDlpOptions.cs                // executable/ffmpeg path overrides, format, timeout, max-downloads cap
+    ├── YtDlpOptions.cs                // executable/ffmpeg path overrides, default max height, timeout, max-downloads cap
     ├── YtDlpProgressParser.cs         // pure "[download] NN.N%" / "video X of Y" line parsing
+    ├── YtDlpFormatSelector.cs         // pure quality-option -> -f format selector string
     ├── YtDlpResult.cs                 // success/output-paths/error result
     ├── IYtDlpRunner.cs
     └── YtDlpRunner.cs                 // shells out to yt-dlp via ArgumentList, streams progress, kills tree on timeout
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector
 └── Integration/                      // live Jackett/qBittorrent/Discord/yt-dlp checks, self-skipping
 ```

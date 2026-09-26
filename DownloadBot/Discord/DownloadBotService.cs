@@ -289,6 +289,14 @@ public sealed class DownloadBotService(
             .WithDescription("Change which drive new downloads are saved to")
             .Build();
 
+        var qualityChoices = new ApplicationCommandOptionChoiceProperties[]
+        {
+            new() { Name = "1080p (default)", Value = "1080" },
+            new() { Name = "4K", Value = "2160" },
+            new() { Name = "720p", Value = "720" },
+            new() { Name = "Best available (no cap)", Value = "best" }
+        };
+
         var downloadYtCommand = new SlashCommandBuilder()
             .WithName("download-yt")
             .WithDescription("Download a video (or playlist) via yt-dlp and save it to disk")
@@ -297,6 +305,8 @@ public sealed class DownloadBotService(
                 "Add to an existing folder — start typing to search", isRequired: false, isAutocomplete: true)
             .AddOption("newfoldername", ApplicationCommandOptionType.String,
                 "Create a new folder with this name and add it there", isRequired: false)
+            .AddOption("quality", ApplicationCommandOptionType.String,
+                "Max resolution — defaults to 1080p (or best available below it)", isRequired: false, choices: qualityChoices)
             .Build();
 
         try
@@ -487,7 +497,10 @@ public sealed class DownloadBotService(
             : !string.IsNullOrWhiteSpace(addToFolder) ? addToFolder
             : null;
 
-        logger.LogInformation("/download-yt invoked by {User}: url={Url} folder={Folder}", command.User.Username, url, folderName ?? "(none)");
+        var quality = command.Data.Options.FirstOrDefault(o => o.Name == "quality")?.Value as string;
+
+        logger.LogInformation("/download-yt invoked by {User}: url={Url} folder={Folder} quality={Quality}",
+            command.User.Username, url, folderName ?? "(none)", quality ?? "(default)");
 
         var requestId = Guid.NewGuid();
         using var cts = new CancellationTokenSource();
@@ -526,7 +539,7 @@ public sealed class DownloadBotService(
                 playlistTotal = p.PlaylistTotal;
             });
 
-            var downloadTask = ytDlp.DownloadAsync(url, savePath, folderName, progress, () => hasStarted = true, cts.Token);
+            var downloadTask = ytDlp.DownloadAsync(url, savePath, folderName, quality, progress, () => hasStarted = true, cts.Token);
             var cancelButton = BuildDownloadYtCancelButton(requestId);
 
             while (!downloadTask.IsCompleted)
@@ -880,7 +893,7 @@ public sealed class DownloadBotService(
                 "Shows free space on each configured drive and lets you pick which one new /download " +
                 "adds are saved to (they all mirror the same folder layout, just under a different " +
                 "letter). Doesn't move or affect anything already downloading.")
-            .AddField("/download-yt url addtofolder newfoldername",
+            .AddField("/download-yt url addtofolder newfoldername quality",
                 "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
                 "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
                 "as-is. Shows live progress. If another /download-yt is already running, yours queues " +
@@ -892,7 +905,9 @@ public sealed class DownloadBotService(
                 "into one shared folder (e.g. a montage series acting as one Plex show), pass either " +
                 "`addtofolder` (pick an existing folder — start typing to search) or `newfoldername` " +
                 "(create one) — not both.\n" +
-                "Example: `/download-yt url:<link> newfoldername:Rocket League Montage`")
+                "`quality` picks a max resolution — 1080p, 4K, 720p, or best available uncapped. " +
+                "Defaults to 1080p (or the best available below it) if left blank.\n" +
+                "Example: `/download-yt url:<link> newfoldername:Rocket League Montage quality:4K`")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
