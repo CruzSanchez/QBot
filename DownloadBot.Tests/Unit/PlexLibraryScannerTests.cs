@@ -9,6 +9,8 @@ public class PlexLibraryScannerTests
     {
         public IReadOnlyList<(string Path, string Name)> GetEntries(string categoryFolderName) =>
             data.GetValueOrDefault(categoryFolderName, []);
+
+        public Task Ready => Task.CompletedTask;
     }
 
     [Fact]

@@ -127,6 +127,7 @@ DownloadBot/
     ├── QBittorrentOptions.cs
     ├── QBitApiClient.cs              // session-cookie auth, add/stop/list/lookup torrents
     ├── DownloadTrackingStore.cs      // hash → {title, channel, user}, persisted to data/tracked-downloads.json
+    ├── ActiveDriveStore.cs           // which drive new downloads route to (/switch-drive), persisted to data/active-drive.json
     ├── StallDetector.cs              // pure "no progress for too long" decision logic
     ├── ActiveDownloadFormatter.cs    // speed/ETA formatting for /active-downloads
     ├── TorrentNameMatcher.cs         // fuzzy name matching when a hash isn't known upfront
@@ -134,6 +135,6 @@ DownloadBot/
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, DashboardFormatter
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter
 └── Integration/                      // live Jackett/qBittorrent/Discord checks, self-skipping
 ```

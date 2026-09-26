@@ -8,6 +8,11 @@ public interface ILibraryCache
     // categoryFolderName is the literal folder name under \plex\ on some drive (e.g. "Movies") —
     // same names PlexLibraryScanner maps a /download type to.
     IReadOnlyList<(string Path, string Name)> GetEntries(string categoryFolderName);
+
+    // Completes once the first snapshot has been built. DownloadBotService awaits this before
+    // connecting to Discord/registering commands, so the bot never accepts a /download before the
+    // whole library's been scanned at least once — no per-request snapshot-building, no race window.
+    Task Ready { get; }
 }
 
 // Owns the actual disk scanning for the library duplicate-check, on a 12-hour refresh cycle, so a
@@ -23,18 +28,25 @@ public sealed class LibraryCacheService(ILogger<LibraryCacheService> logger) : B
     private volatile Dictionary<string, IReadOnlyList<(string Path, string Name)>> _snapshot =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly TaskCompletionSource _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task Ready => _readyTcs.Task;
+
     public IReadOnlyList<(string Path, string Name)> GetEntries(string categoryFolderName) =>
         _snapshot.GetValueOrDefault(categoryFolderName, []);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Refresh immediately at startup rather than waiting a full 12 hours for the first pass.
-        Refresh();
+        // Off the calling thread (Task.Run), not a direct synchronous call — StartAsync should
+        // return promptly regardless of how the disk scan performs. Whoever needs the result waits
+        // on Ready explicitly instead of relying on host-startup ordering to happen to block for it.
+        await Task.Run(Refresh, stoppingToken);
+        _readyTcs.TrySetResult();
 
         using var timer = new PeriodicTimer(RefreshInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            Refresh();
+            await Task.Run(Refresh, stoppingToken);
         }
     }
 

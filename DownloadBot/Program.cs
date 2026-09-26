@@ -28,6 +28,7 @@ try
     builder.Services.Configure<QBittorrentOptions>(builder.Configuration.GetSection("QBittorrent"));
 
     builder.Services.AddSingleton<DownloadTrackingStore>();
+    builder.Services.AddSingleton<ActiveDriveStore>();
     builder.Services.AddSingleton<DiscordSocketClient>();
     builder.Services.AddSingleton<IPlexLibraryScanner, PlexLibraryScanner>();
     builder.Services.AddSingleton<IDriveSpaceChecker, DriveSpaceChecker>();

@@ -29,28 +29,38 @@ place so the app builds and runs; fill in real values and re-check the box.
       ```
       Confirm `QBittorrent:BaseUrl` matches the WebUI port.
 
-- [ ] **Save paths per category** — `QBittorrent:SavePaths` in `appsettings.json`.
-      This is what the bot passes to qBittorrent when adding a torrent directly, so
-      it lands in the right folder without needing an RSS Auto Downloading Rule.
-      I only confirmed one of these from a screenshot (`movie` → `G:\plex\Movies`);
-      **please verify/correct the other three** (`tv`, `kids-movie`, `kids-tv`) —
-      I guessed at their folder names from the pattern, not confirmed:
+- [ ] **Save paths per drive, per category** — `QBittorrent:SavePaths` in
+      `appsettings.json`. This is what the bot passes to qBittorrent when adding a
+      torrent directly, so it lands in the right folder without needing an RSS
+      Auto Downloading Rule. As of 2026-09-26 it's nested by drive letter first,
+      since D/E/F/G all mirror the same folder layout:
       ```json
+      "DefaultDrive": "G",
       "SavePaths": {
-        "movie": "G:\\plex\\Movies",
-        "tv": "G:\\plex\\TV Shows",
-        "kids-movie": "G:\\plex\\Kids Movies",
-        "kids-tv": "G:\\plex\\Kids TV Shows",
-        "music": "G:\\plex\\Music"
+        "G": {
+          "movie": "G:\\plex\\Movies",
+          "tv": "G:\\plex\\TV Shows",
+          "kids-movie": "G:\\plex\\Kids Movies",
+          "kids-tv": "G:\\plex\\Kids TV Shows",
+          "music": "G:\\plex\\Music"
+        },
+        "D": { ... same keys, D: paths ... },
+        "E": { ... same keys, E: paths ... },
+        "F": { ... same keys, F: paths ... }
       }
       ```
-      `music` (2026-09-24) is hardcoded to `G:` for now, same as the others — you
-      mentioned this will eventually need to work across whichever drive has room
-      (`*/plex/Music`) rather than always `G:`. That's not built yet: `SavePaths`
-      is a fixed path per type, unlike the library duplicate-check (`PlexLibraryScanner`),
-      which already scans every attached drive. Say the word if/when you want
-      `/download` to pick a drive dynamically for adds too — it's a real change
-      (some kind of drive-selection or free-space-based routing), not a config tweak.
+      I only ever confirmed `G`'s paths from a screenshot; **D/E/F are assumed to
+      mirror it exactly (just the drive letter swapped) per what you described** —
+      please verify that's actually true on the server, especially the folder
+      names for `tv`/`kids-movie`/`kids-tv`/`music` on each drive.
+- [ ] **`/switch-drive`** — new command, changes `QBittorrentOptions.DefaultDrive`'s
+      *runtime* equivalent (persisted to `data/active-drive.json`, gitignored) —
+      i.e. which key in `SavePaths` above new `/download` adds route to. Doesn't
+      touch anything already downloading, and doesn't move existing files. This is
+      manual switching only — not automatic free-space-based routing. Say the word
+      if you want it to pick a drive automatically (e.g. whichever has the most
+      free space) instead of requiring someone to run `/switch-drive` — that's a
+      real feature to build, not a config tweak.
 
 ## Architecture change (2026-09-20)
 

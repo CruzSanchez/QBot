@@ -15,10 +15,11 @@ public sealed class DownloadBotService(
     IJackettClient jackett,
     IQBitApiClient qbit,
     DownloadTrackingStore tracking,
+    ActiveDriveStore activeDriveStore,
     IPlexLibraryScanner libraryScanner,
+    ILibraryCache libraryCache,
     IDriveSpaceChecker driveSpaceChecker,
     IOptions<DiscordOptions> options,
-    IOptions<QBittorrentOptions> qbitOptions,
     IHostApplicationLifetime appLifetime,
     ILogger<DownloadBotService> logger) : BackgroundService
 {
@@ -83,6 +84,15 @@ public sealed class DownloadBotService(
             logger.LogError("Discord token is not configured. Set Discord:Token in configuration.");
             return;
         }
+
+        // Wait for the library cache's first full scan before connecting — /download's duplicate-check
+        // reads from that snapshot, never the filesystem itself, so it needs to already be built before
+        // any command can arrive. Bounded: a hung/unresponsive drive shouldn't block the bot forever,
+        // it should just start with a stale/empty snapshot and let the next 12h refresh catch up.
+        var cacheReady = await Task.WhenAny(libraryCache.Ready, Task.Delay(TimeSpan.FromMinutes(2), stoppingToken)) == libraryCache.Ready;
+        logger.LogInformation(cacheReady
+            ? "Library cache ready — connecting to Discord"
+            : "Library cache still building after 2 minutes — connecting to Discord anyway; duplicate-check may be incomplete until it finishes");
 
         await client.LoginAsync(TokenType.Bot, token);
         await client.StartAsync();
@@ -264,6 +274,13 @@ public sealed class DownloadBotService(
             .WithDescription("Live-updating view of active downloads for about a minute")
             .Build();
 
+        // No options — posts a picker (like /cancel) showing free space per configured drive, so you
+        // can see what you're choosing between instead of picking a letter blind.
+        var switchDriveCommand = new SlashCommandBuilder()
+            .WithName("switch-drive")
+            .WithDescription("Change which drive new downloads are saved to")
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -275,6 +292,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(activeDownloadsCommand, guildId);
                 await client.Rest.CreateGuildCommand(cancelCommand, guildId);
                 await client.Rest.CreateGuildCommand(statusCommand, guildId);
+                await client.Rest.CreateGuildCommand(switchDriveCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -286,6 +304,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(activeDownloadsCommand);
                 await client.Rest.CreateGlobalCommand(cancelCommand);
                 await client.Rest.CreateGlobalCommand(statusCommand);
+                await client.Rest.CreateGlobalCommand(switchDriveCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -345,7 +364,83 @@ public sealed class DownloadBotService(
             case "status":
                 await HandleStatusAsync(command);
                 break;
+            case "switch-drive":
+                await HandleSwitchDriveAsync(command);
+                break;
         }
+    }
+
+    // Shows free space per configured drive (like /drive-check) alongside a picker, instead of asking
+    // for a bare drive letter blind — same "see what you're choosing between" pattern as /download's
+    // search-result picker and /cancel's torrent picker.
+    private Task HandleSwitchDriveAsync(SocketSlashCommand command)
+    {
+        var drives = activeDriveStore.AvailableDrives.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
+        if (drives.Count == 0)
+        {
+            return command.RespondAsync("No drives configured in `QBittorrent:SavePaths`.", ephemeral: true);
+        }
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId("switch-drive-pick")
+            .WithPlaceholder("Choose a drive");
+
+        var lines = new List<string>();
+        foreach (var drive in drives)
+        {
+            var isCurrent = string.Equals(drive, activeDriveStore.CurrentDrive, StringComparison.OrdinalIgnoreCase);
+            var space = driveSpaceChecker.GetFreeSpace(drive).FirstOrDefault();
+            var spaceText = space is null ? "not attached/ready" : $"{space.FreeGb:F2} GB free of {space.TotalGb:F2} GB";
+
+            menu.AddOption(isCurrent ? $"{drive}: (current)" : $"{drive}:", drive, Truncate(spaceText, 100));
+            lines.Add(isCurrent ? $"**{drive}:** — {spaceText} — *current*" : $"**{drive}:** — {spaceText}");
+        }
+
+        var embed = new EmbedBuilder()
+            .WithTitle("Switch download drive")
+            .WithDescription(string.Join('\n', lines))
+            .Build();
+
+        var buttons = new ComponentBuilder()
+            .WithSelectMenu(menu)
+            .WithButton("Cancel", "switch-drive-cancel", ButtonStyle.Secondary, row: 1);
+
+        return command.RespondAsync(embed: embed, components: buttons.Build(), ephemeral: true);
+    }
+
+    private Task HandleSwitchDrivePickAsync(SocketMessageComponent component)
+    {
+        var drive = component.Data.Values.First();
+
+        if (!activeDriveStore.TrySetDrive(drive))
+        {
+            logger.LogWarning("User {User} tried to switch to unknown drive \"{Drive}\"", component.User.Username, drive);
+            return component.UpdateAsync(m =>
+            {
+                m.Content = $"Unknown drive `{drive}`.";
+                m.Embed = null;
+                m.Components = new ComponentBuilder().Build();
+            });
+        }
+
+        logger.LogInformation("User {User} switched the active drive to {Drive}", component.User.Username, activeDriveStore.CurrentDrive);
+        return component.UpdateAsync(m =>
+        {
+            m.Content = $"✅ New downloads will now be saved to drive **{activeDriveStore.CurrentDrive}:**.";
+            m.Embed = null;
+            m.Components = new ComponentBuilder().Build();
+        });
+    }
+
+    private Task HandleSwitchDriveCancelAsync(SocketMessageComponent component)
+    {
+        logger.LogInformation("User {User} cancelled /switch-drive", component.User.Username);
+        return component.UpdateAsync(m =>
+        {
+            m.Content = "Cancelled — drive unchanged.";
+            m.Embed = null;
+            m.Components = new ComponentBuilder().Build();
+        });
     }
 
     // Posts the same embed the live dashboard shows and self-edits it every few seconds for about a
@@ -535,6 +630,10 @@ public sealed class DownloadBotService(
                 "Cancel any active or stuck torrent in qBittorrent — not just ones you added. Pick " +
                 "which one, then choose to remove it (keeping any partially-downloaded files) or " +
                 "remove and delete the files too.")
+            .AddField("/switch-drive",
+                "Shows free space on each configured drive and lets you pick which one new /download " +
+                "adds are saved to (they all mirror the same folder layout, just under a different " +
+                "letter). Doesn't move or affect anything already downloading.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
@@ -636,6 +735,7 @@ public sealed class DownloadBotService(
             "download-pick-cancel" => HandlePickerCancelAsync(component),
             "space-confirm-yes" or "space-confirm-no" => HandleSpaceConfirmAsync(component),
             "cancel-confirm-remove" or "cancel-confirm-remove-delete" or "cancel-confirm-no" => HandleCancelConfirmAsync(component),
+            "switch-drive-cancel" => HandleSwitchDriveCancelAsync(component),
             _ => Task.CompletedTask
         };
     }
@@ -850,6 +950,7 @@ public sealed class DownloadBotService(
     {
         "download-pick" => HandleDownloadPickAsync(component),
         "cancel-pick" => HandleCancelPickAsync(component),
+        "switch-drive-pick" => HandleSwitchDrivePickAsync(component),
         _ => Task.CompletedTask
     };
 
@@ -898,7 +999,7 @@ public sealed class DownloadBotService(
     // enough room, or if the check itself couldn't be done (never block on our own check failing).
     private async Task<bool> PostSpaceWarningIfInsufficientAsync(SocketMessageComponent component, SearchResult picked, string type)
     {
-        if (!qbitOptions.Value.SavePaths.TryGetValue(type, out var savePath) || string.IsNullOrWhiteSpace(savePath))
+        if (!activeDriveStore.TryGetSavePath(type, out var savePath))
             return false; // AddToQBittorrentAsync will surface this same configuration problem itself
 
         try
@@ -1070,9 +1171,9 @@ public sealed class DownloadBotService(
         var marker = CategoryMarkers.GetValueOrDefault(type, "");
         var taggedTitle = string.IsNullOrEmpty(marker) ? picked.Title : $"{marker} {picked.Title}";
 
-        if (!qbitOptions.Value.SavePaths.TryGetValue(type, out var savePath) || string.IsNullOrWhiteSpace(savePath))
+        if (!activeDriveStore.TryGetSavePath(type, out var savePath))
         {
-            logger.LogError("No QBittorrent:SavePaths entry configured for type \"{Type}\"", type);
+            logger.LogError("No QBittorrent:SavePaths entry for drive \"{Drive}\" + type \"{Type}\"", activeDriveStore.CurrentDrive, type);
             return (false, null);
         }
 
