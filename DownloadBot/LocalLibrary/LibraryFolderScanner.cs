@@ -5,73 +5,61 @@ namespace DownloadBot.LocalLibrary;
 // The title/year matching core of PlexLibraryScanner, extracted so it can be tested against an
 // arbitrary directory (a temp folder) without needing a real system drive — PlexLibraryScanner's
 // own public API only ever scans real drives, deliberately excluding C: where test folders live.
+//
+// Only checks the category folder's immediate children, never recurses into what a title's own
+// folder contains (season folders, extras, individual tracks, etc.) — a Plex library is one
+// folder-or-file per title at that top level, so there's nothing to match further down anyway.
+// Recursing the whole tree used to mean every /download request walked the entire library
+// (every file, every nested folder), which got slow fast on a large library like Music.
 public static class LibraryFolderScanner
 {
     public static IEnumerable<string> FindMatches(string categoryPath, string title, int? year, ILogger logger)
     {
-        foreach (var dir in EnumerateDirectoriesSafe(categoryPath, logger))
+        foreach (var dir in EnumerateTopLevelDirectoriesSafe(categoryPath, logger))
         {
             if (NameMatches(Path.GetFileName(dir), title, year))
                 yield return dir;
         }
 
-        foreach (var file in EnumerateFilesSafe(categoryPath, logger))
+        foreach (var file in EnumerateTopLevelFilesSafe(categoryPath, logger))
         {
             if (NameMatches(Path.GetFileNameWithoutExtension(file), title, year))
                 yield return file;
         }
     }
 
-    // Directory.GetDirectories/.GetFiles with SearchOption.AllDirectories aborts the ENTIRE call if it
-    // hits even one inaccessible subfolder anywhere in the tree (permissions, a junction, a hidden
-    // system folder) — on a large library that would silently zero out every result for the whole
-    // category, not just the bad branch. Walking manually lets a single bad subfolder be skipped
-    // instead of losing the whole scan.
-    private static IEnumerable<string> EnumerateDirectoriesSafe(string root, ILogger logger)
+    private static IEnumerable<string> EnumerateTopLevelDirectoriesSafe(string root, ILogger logger)
     {
-        var stack = new Stack<string>();
-        stack.Push(root);
-
-        while (stack.Count > 0)
+        string[] subdirs;
+        try
         {
-            var current = stack.Pop();
-            string[] subdirs;
-            try
-            {
-                subdirs = Directory.GetDirectories(current);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Skipping inaccessible directory {Path}", current);
-                continue;
-            }
-
-            foreach (var subdir in subdirs)
-            {
-                yield return subdir;
-                stack.Push(subdir);
-            }
+            subdirs = Directory.GetDirectories(root);
         }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not list directories under {Path}", root);
+            yield break;
+        }
+
+        foreach (var subdir in subdirs)
+            yield return subdir;
     }
 
-    private static IEnumerable<string> EnumerateFilesSafe(string root, ILogger logger)
+    private static IEnumerable<string> EnumerateTopLevelFilesSafe(string root, ILogger logger)
     {
-        foreach (var dir in EnumerateDirectoriesSafe(root, logger).Prepend(root))
+        string[] files;
+        try
         {
-            string[] files;
-            try
-            {
-                files = Directory.GetFiles(dir);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Skipping inaccessible directory {Path} while listing files", dir);
-                continue;
-            }
-
-            foreach (var file in files)
-                yield return file;
+            files = Directory.GetFiles(root);
         }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not list files under {Path}", root);
+            yield break;
+        }
+
+        foreach (var file in files)
+            yield return file;
     }
 
     private static bool NameMatches(string candidateName, string title, int? year)
