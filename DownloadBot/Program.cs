@@ -33,6 +33,12 @@ try
     builder.Services.AddSingleton<IDriveSpaceChecker, DriveSpaceChecker>();
     builder.Services.AddHttpClient<IJackettClient, JackettClient>();
 
+    // Registered once as a concrete singleton, then exposed both as the ILibraryCache PlexLibraryScanner
+    // reads from and as the hosted service that keeps it refreshed — same instance either way.
+    builder.Services.AddSingleton<LibraryCacheService>();
+    builder.Services.AddSingleton<ILibraryCache>(sp => sp.GetRequiredService<LibraryCacheService>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<LibraryCacheService>());
+
     // qBittorrent auth uses a session cookie set by /api/v2/auth/login, so the HttpClient must persist cookies across calls.
     builder.Services.AddHttpClient<IQBitApiClient, QBitApiClient>()
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler

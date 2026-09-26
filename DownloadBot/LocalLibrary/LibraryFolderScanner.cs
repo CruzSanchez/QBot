@@ -13,19 +13,20 @@ namespace DownloadBot.LocalLibrary;
 // (every file, every nested folder), which got slow fast on a large library like Music.
 public static class LibraryFolderScanner
 {
-    public static IEnumerable<string> FindMatches(string categoryPath, string title, int? year, ILogger logger)
+    public static IEnumerable<string> FindMatches(string categoryPath, string title, int? year, ILogger logger) =>
+        EnumerateTopLevelEntries(categoryPath, logger)
+            .Where(e => NameMatches(e.Name, title, year))
+            .Select(e => e.Path);
+
+    // Exposed separately (not just via FindMatches) so a caller can list everything once — e.g. to
+    // build a cached snapshot — instead of re-reading the same folder from disk for every query.
+    public static IEnumerable<(string Path, string Name)> EnumerateTopLevelEntries(string categoryPath, ILogger logger)
     {
         foreach (var dir in EnumerateTopLevelDirectoriesSafe(categoryPath, logger))
-        {
-            if (NameMatches(Path.GetFileName(dir), title, year))
-                yield return dir;
-        }
+            yield return (dir, Path.GetFileName(dir));
 
         foreach (var file in EnumerateTopLevelFilesSafe(categoryPath, logger))
-        {
-            if (NameMatches(Path.GetFileNameWithoutExtension(file), title, year))
-                yield return file;
-        }
+            yield return (file, Path.GetFileNameWithoutExtension(file));
     }
 
     private static IEnumerable<string> EnumerateTopLevelDirectoriesSafe(string root, ILogger logger)
@@ -62,7 +63,7 @@ public static class LibraryFolderScanner
             yield return file;
     }
 
-    private static bool NameMatches(string candidateName, string title, int? year)
+    public static bool NameMatches(string candidateName, string title, int? year)
     {
         var (candidateTitle, candidateYear) = TitleYear.Parse(candidateName);
         if (!string.Equals(candidateTitle, title, StringComparison.OrdinalIgnoreCase))

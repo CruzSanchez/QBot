@@ -107,6 +107,19 @@ confirmation within ~10 seconds. Consequences:
   run it to get the same embed, self-refreshing every 5s for about a minute,
   ephemeral (only they see it). No config needed.
 
+## Library duplicate-check now caches, refreshed every 12h (2026-09-26)
+
+- `/download`'s "already have this?" check used to scan the filesystem on every
+  single request, which got slow on a large library (Music especially). It now
+  reads from an in-memory snapshot (`LibraryCacheService`) that's rebuilt every
+  12 hours (and once immediately at startup).
+- **Tradeoff**: something added to your Plex library in the last 12 hours won't
+  show up in the "already have this?" warning until the next refresh. This only
+  affects that soft warning — it never blocks or delays an actual download.
+- No config needed. If you want a way to force an immediate refresh (e.g. a
+  `/refresh-library` command) instead of waiting up to 12h, say so — not built,
+  but straightforward to add.
+
 ## Auto-deploy on push (2026-09-23)
 
 - [ ] **Set up the self-hosted runner** — one-time, done on the server itself

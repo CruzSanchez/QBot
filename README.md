@@ -120,7 +120,8 @@ DownloadBot/
 ├── LocalLibrary/
 │   ├── TitleYear.cs                  // parses "<title> <year>" from a query or folder name
 │   ├── LibraryFolderScanner.cs       // title/year matching core, testable against any path
-│   ├── PlexLibraryScanner.cs         // walks \plex\<category> folders across real drives
+│   ├── LibraryCacheService.cs        // scans \plex\<category> folders across drives every 12h, caches names
+│   ├── PlexLibraryScanner.cs         // matches a query against the cache — no disk I/O per request
 │   └── DriveSpaceChecker.cs          // free space per attached drive, for /drive-check
 └── QBittorrent/
     ├── QBittorrentOptions.cs
@@ -133,6 +134,6 @@ DownloadBot/
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, StallDetector, DownloadTrackingStore, DashboardFormatter
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, DashboardFormatter
 └── Integration/                      // live Jackett/qBittorrent/Discord checks, self-skipping
 ```
