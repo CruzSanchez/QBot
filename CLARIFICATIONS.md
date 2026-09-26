@@ -169,3 +169,47 @@ so it always exactly matches what's pushed — any local uncommitted changes mad
 directly on the server get discarded on the next push. If you ever edit files
 directly on the server for a quick test, commit/push them (or stash them) before
 pushing something else, or they'll be silently wiped on the next deploy.
+
+## yt-dlp video downloads via /download-yt (2026-09-26)
+
+- [ ] **Verify the exact `yt-dlp.exe`/`ffmpeg.exe` filenames under
+      `C:\Users\johnb\Desktop\repos`** — config currently assumes
+      `yt-dlp.exe` sits directly in that folder and points
+      `YtDlp:FfmpegLocation` at the folder itself:
+      ```json
+      "YtDlp": {
+        "ExecutablePath": "C:\\Users\\johnb\\Desktop\\repos\\yt-dlp.exe",
+        "FfmpegLocation": "C:\\Users\\johnb\\Desktop\\repos"
+      }
+      ```
+      If either binary is actually nested deeper (e.g. inside a
+      version-named subfolder, or ffmpeg's own `bin\` folder from how its
+      zip extracts), correct these two values. `/download-yt` will report
+      "Could not start yt-dlp..." if `ExecutablePath` is wrong; a wrong
+      `FfmpegLocation` will more likely show up as a download that
+      completes the raw stream(s) but fails to merge into one file.
+- The `"youtube"` key lives under the existing `QBittorrent:SavePaths`
+  structure (one added per drive: `G`/`D`/`E`/`F`, all `\plex\Youtube`) so
+  `/switch-drive` applies to it automatically with zero extra code — this is
+  a minor naming mismatch (it's not a qBittorrent path) I accepted rather
+  than building a second, parallel save-path config section for one content
+  type. Say so if you'd rather it live elsewhere.
+- **Playlists are supported**, capped at `YtDlp:MaxDownloadsPerInvocation`
+  (default 25) via yt-dlp's own `--max-downloads`, so a huge/accidental
+  playlist link can't run unbounded — anything past the cap is just not
+  downloaded, no error.
+- **`YtDlp:TimeoutMinutes`** (default 30) covers the *whole* invocation,
+  including a full playlist — a large playlist near the 25-item cap may
+  need a longer timeout than a single video would. Raise it if a playlist
+  download times out partway through.
+- **A second `/download-yt` queues** behind one already in progress (shown
+  as "⏳ Queued" in its embed) rather than running in parallel or being
+  rejected — this server also runs qBittorrent and Plex, and two
+  unthrottled yt-dlp/ffmpeg processes at once would compete for the same
+  disk/NIC/CPU.
+- Downloads are **disk-only** — saved to the active drive's Youtube folder,
+  never posted back as a Discord attachment (Discord's upload size limits
+  make that impractical for anything beyond a very short clip).
+- Format is fixed to best-available video+audio merged into mp4
+  (`YtDlp:Format`/`YtDlp:MergeOutputFormat`) — no per-download quality or
+  audio-only option on the command itself.

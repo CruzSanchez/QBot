@@ -33,6 +33,13 @@ torrents directly and gets an immediate, reliable success/failure signal instead
 waiting on an RSS poll cycle. You can leave your existing rules in place (harmless)
 or remove them.
 
+`/download-yt url:<link>` is a separate pipeline: it shells out to
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) to download a video or playlist (YouTube
+and hundreds of other sites) and saves it to the active drive's Youtube folder —
+no Jackett/qBittorrent involved. Shows live progress; a second `/download-yt`
+queues behind one already running instead of running in parallel. See
+[CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg setup.
+
 ## Setup
 
 See [CLARIFICATIONS.md](CLARIFICATIONS.md) for every credential and config value
@@ -133,8 +140,14 @@ DownloadBot/
     ├── TorrentNameMatcher.cs         // fuzzy name matching when a hash isn't known upfront
     ├── MagnetHash.cs                 // pulls the btih hash out of a magnet URI
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
+└── YtDlp/
+    ├── YtDlpOptions.cs                // executable/ffmpeg path overrides, format, timeout, max-downloads cap
+    ├── YtDlpProgressParser.cs         // pure "[download] NN.N%" / "video X of Y" line parsing
+    ├── YtDlpResult.cs                 // success/output-paths/error result
+    ├── IYtDlpRunner.cs
+    └── YtDlpRunner.cs                 // shells out to yt-dlp via ArgumentList, streams progress, kills tree on timeout
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter
-└── Integration/                      // live Jackett/qBittorrent/Discord checks, self-skipping
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser
+└── Integration/                      // live Jackett/qBittorrent/Discord/yt-dlp checks, self-skipping
 ```

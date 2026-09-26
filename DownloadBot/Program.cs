@@ -3,6 +3,7 @@ using DownloadBot.Discord;
 using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
+using DownloadBot.YtDlp;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -26,9 +27,11 @@ try
     builder.Services.Configure<DiscordOptions>(builder.Configuration.GetSection("Discord"));
     builder.Services.Configure<JackettOptions>(builder.Configuration.GetSection("Jackett"));
     builder.Services.Configure<QBittorrentOptions>(builder.Configuration.GetSection("QBittorrent"));
+    builder.Services.Configure<YtDlpOptions>(builder.Configuration.GetSection("YtDlp"));
 
     builder.Services.AddSingleton<DownloadTrackingStore>();
     builder.Services.AddSingleton<ActiveDriveStore>();
+    builder.Services.AddSingleton<IYtDlpRunner, YtDlpRunner>();
     builder.Services.AddSingleton<DiscordSocketClient>();
     builder.Services.AddSingleton<IPlexLibraryScanner, PlexLibraryScanner>();
     builder.Services.AddSingleton<IDriveSpaceChecker, DriveSpaceChecker>();

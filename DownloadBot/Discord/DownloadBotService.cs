@@ -4,6 +4,7 @@ using global::Discord.WebSocket;
 using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
+using DownloadBot.YtDlp;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -19,6 +20,7 @@ public sealed class DownloadBotService(
     IPlexLibraryScanner libraryScanner,
     ILibraryCache libraryCache,
     IDriveSpaceChecker driveSpaceChecker,
+    IYtDlpRunner ytDlp,
     IOptions<DiscordOptions> options,
     IHostApplicationLifetime appLifetime,
     ILogger<DownloadBotService> logger) : BackgroundService
@@ -281,6 +283,12 @@ public sealed class DownloadBotService(
             .WithDescription("Change which drive new downloads are saved to")
             .Build();
 
+        var downloadYtCommand = new SlashCommandBuilder()
+            .WithName("download-yt")
+            .WithDescription("Download a video (or playlist) via yt-dlp and save it to disk")
+            .AddOption("url", ApplicationCommandOptionType.String, "Video or playlist URL", isRequired: true)
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -293,6 +301,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(cancelCommand, guildId);
                 await client.Rest.CreateGuildCommand(statusCommand, guildId);
                 await client.Rest.CreateGuildCommand(switchDriveCommand, guildId);
+                await client.Rest.CreateGuildCommand(downloadYtCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -305,6 +314,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(cancelCommand);
                 await client.Rest.CreateGlobalCommand(statusCommand);
                 await client.Rest.CreateGlobalCommand(switchDriveCommand);
+                await client.Rest.CreateGlobalCommand(downloadYtCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -366,6 +376,9 @@ public sealed class DownloadBotService(
                 break;
             case "switch-drive":
                 await HandleSwitchDriveAsync(command);
+                break;
+            case "download-yt":
+                await HandleDownloadYtAsync(command);
                 break;
         }
     }
@@ -441,6 +454,134 @@ public sealed class DownloadBotService(
             m.Embed = null;
             m.Components = new ComponentBuilder().Build();
         });
+    }
+
+    // Owns the whole yt-dlp download lifecycle itself — unlike qBittorrent, there's no external
+    // service to poll: the child process is started and awaited right here, so no background
+    // service or persisted tracking store is needed. A second /download-yt started while one is
+    // already running queues behind it (see YtDlpRunner's semaphore) rather than running in
+    // parallel or being rejected — the "Queued" state below reflects that wait.
+    private async Task HandleDownloadYtAsync(SocketSlashCommand command)
+    {
+        var url = (string)command.Data.Options.First(o => o.Name == "url").Value;
+        logger.LogInformation("/download-yt invoked by {User}: url={Url}", command.User.Username, url);
+
+        try
+        {
+            await command.DeferAsync();
+
+            if (!activeDriveStore.TryGetSavePath("youtube", out var savePath))
+            {
+                await command.FollowupAsync("No `youtube` save path configured for the active drive — check `QBittorrent:SavePaths`.");
+                return;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(savePath);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to create youtube save directory {SavePath}", savePath);
+                await command.FollowupAsync($"Could not create the destination folder `{savePath}`: {ex.Message}");
+                return;
+            }
+
+            var hasStarted = false;
+            var currentPercent = 0.0;
+            int? playlistIndex = null;
+            int? playlistTotal = null;
+
+            var progress = new Progress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>(p =>
+            {
+                currentPercent = p.Percent;
+                playlistIndex = p.PlaylistIndex;
+                playlistTotal = p.PlaylistTotal;
+            });
+
+            var downloadTask = ytDlp.DownloadAsync(url, savePath, progress, () => hasStarted = true, CancellationToken.None);
+
+            while (!downloadTask.IsCompleted)
+            {
+                await Task.WhenAny(downloadTask, Task.Delay(TimeSpan.FromSeconds(5)));
+
+                var progressEmbed = BuildDownloadYtProgressEmbed(url, hasStarted, currentPercent, playlistIndex, playlistTotal);
+                try
+                {
+                    await command.ModifyOriginalResponseAsync(m => m.Embed = progressEmbed);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Failed to update /download-yt progress embed for {Url}", url);
+                }
+            }
+
+            var result = await downloadTask;
+
+            if (!result.Success)
+            {
+                logger.LogError("yt-dlp failed for {Url}: {Error}\n{StderrTail}", url, result.ErrorMessage, result.StderrTail);
+            }
+            else
+            {
+                logger.LogInformation("/download-yt for {Url} -> success, {Count} file(s)", url, result.OutputFilePaths.Count);
+            }
+
+            var finalEmbed = result.Success
+                ? new EmbedBuilder()
+                    .WithTitle("✅ Download complete")
+                    .WithDescription(FormatDownloadYtSuccess(result.OutputFilePaths, savePath))
+                    .WithColor(DashboardFormatter.GreenColor)
+                    .Build()
+                : new EmbedBuilder()
+                    .WithTitle("❌ Download failed")
+                    .WithDescription(result.ErrorMessage ?? "Unknown error.")
+                    .WithColor(DashboardFormatter.RedColor)
+                    .Build();
+
+            await command.ModifyOriginalResponseAsync(m => m.Embed = finalEmbed);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to handle /download-yt for {Url}", url);
+            try
+            {
+                await command.FollowupAsync($"Something went wrong: {ex.Message}");
+            }
+            catch (Exception followupEx)
+            {
+                logger.LogError(followupEx, "Also failed to report the /download-yt error back to Discord");
+            }
+        }
+    }
+
+    private static Embed BuildDownloadYtProgressEmbed(string url, bool hasStarted, double percent, int? playlistIndex, int? playlistTotal)
+    {
+        var description = !hasStarted
+            ? "⏳ Queued — waiting for another download to finish..."
+            : playlistIndex is { } index && playlistTotal is { } total
+                ? $"`{url}`\nVideo {index}/{total} — **{percent:F1}%**"
+                : $"`{url}`\nProgress: **{percent:F1}%**";
+
+        return new EmbedBuilder()
+            .WithTitle(hasStarted ? "Downloading..." : "Queued")
+            .WithDescription(description)
+            .WithColor(DashboardFormatter.BlurpleColor)
+            .Build();
+    }
+
+    private static string FormatDownloadYtSuccess(IReadOnlyList<string> paths, string savePath)
+    {
+        if (paths.Count == 0)
+            return $"Saved to `{savePath}` (exact filename not confirmed).";
+
+        if (paths.Count == 1)
+            return $"Saved to `{paths[0]}`";
+
+        const int maxListed = 5;
+        var listed = paths.Take(maxListed).Select(p => $"• `{Path.GetFileName(p)}`");
+        var suffix = paths.Count > maxListed ? $"\n…and {paths.Count - maxListed} more" : "";
+        return $"Saved {paths.Count} files to `{savePath}`:\n{string.Join('\n', listed)}{suffix}";
     }
 
     // Posts the same embed the live dashboard shows and self-edits it every few seconds for about a
@@ -634,6 +775,11 @@ public sealed class DownloadBotService(
                 "Shows free space on each configured drive and lets you pick which one new /download " +
                 "adds are saved to (they all mirror the same folder layout, just under a different " +
                 "letter). Doesn't move or affect anything already downloading.")
+            .AddField("/download-yt url",
+                "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
+                "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
+                "as-is. Shows live progress. If another /download-yt is already running, yours queues " +
+                "behind it instead of running at the same time.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
