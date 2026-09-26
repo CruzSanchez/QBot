@@ -46,6 +46,11 @@ public sealed class DownloadBotService(
     // /cancel's "remove, remove+delete, or nevermind?" confirmations, keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, TorrentState> _pendingCancelConfirmations = new();
 
+    // In-flight/queued /download-yt requests, keyed by a per-request id embedded in that message's
+    // Cancel button — lets anyone cancel a specific download whether it's actively running or still
+    // queued behind another one (YtDlpRunner's semaphore treats both the same way once cancelled).
+    private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _pendingYtDlpDownloads = new();
+
     private sealed record PendingPick(string Type, IReadOnlyList<SearchResult> Results);
 
     private sealed record PendingDuplicateConfirmation(SocketSlashCommand Command, string Title, string Type);
@@ -466,6 +471,10 @@ public sealed class DownloadBotService(
         var url = (string)command.Data.Options.First(o => o.Name == "url").Value;
         logger.LogInformation("/download-yt invoked by {User}: url={Url}", command.User.Username, url);
 
+        var requestId = Guid.NewGuid();
+        using var cts = new CancellationTokenSource();
+        _pendingYtDlpDownloads[requestId] = cts;
+
         try
         {
             await command.DeferAsync();
@@ -499,7 +508,8 @@ public sealed class DownloadBotService(
                 playlistTotal = p.PlaylistTotal;
             });
 
-            var downloadTask = ytDlp.DownloadAsync(url, savePath, progress, () => hasStarted = true, CancellationToken.None);
+            var downloadTask = ytDlp.DownloadAsync(url, savePath, progress, () => hasStarted = true, cts.Token);
+            var cancelButton = BuildDownloadYtCancelButton(requestId);
 
             while (!downloadTask.IsCompleted)
             {
@@ -508,7 +518,11 @@ public sealed class DownloadBotService(
                 var progressEmbed = BuildDownloadYtProgressEmbed(url, hasStarted, currentPercent, playlistIndex, playlistTotal);
                 try
                 {
-                    await command.ModifyOriginalResponseAsync(m => m.Embed = progressEmbed);
+                    await command.ModifyOriginalResponseAsync(m =>
+                    {
+                        m.Embed = progressEmbed;
+                        m.Components = cancelButton;
+                    });
                 }
                 catch (Exception ex)
                 {
@@ -534,12 +548,16 @@ public sealed class DownloadBotService(
                     .WithColor(DashboardFormatter.GreenColor)
                     .Build()
                 : new EmbedBuilder()
-                    .WithTitle("❌ Download failed")
+                    .WithTitle(result.ErrorMessage == "Cancelled." ? "🛑 Cancelled" : "❌ Download failed")
                     .WithDescription(result.ErrorMessage ?? "Unknown error.")
                     .WithColor(DashboardFormatter.RedColor)
                     .Build();
 
-            await command.ModifyOriginalResponseAsync(m => m.Embed = finalEmbed);
+            await command.ModifyOriginalResponseAsync(m =>
+            {
+                m.Embed = finalEmbed;
+                m.Components = new ComponentBuilder().Build();
+            });
         }
         catch (Exception ex)
         {
@@ -553,6 +571,29 @@ public sealed class DownloadBotService(
                 logger.LogError(followupEx, "Also failed to report the /download-yt error back to Discord");
             }
         }
+        finally
+        {
+            _pendingYtDlpDownloads.TryRemove(requestId, out _);
+        }
+    }
+
+    private static MessageComponent BuildDownloadYtCancelButton(Guid requestId) =>
+        new ComponentBuilder().WithButton("Cancel", $"download-yt-cancel:{requestId}", ButtonStyle.Danger).Build();
+
+    // Not tied to whoever ran /download-yt — same "anyone can cancel it" philosophy as /cancel for
+    // qBittorrent downloads. Works whether the request is actively downloading or still queued behind
+    // another one; YtDlpRunner reports a clean "Cancelled." result either way.
+    private Task HandleDownloadYtCancelButtonAsync(SocketMessageComponent component)
+    {
+        var requestId = Guid.Parse(component.Data.CustomId["download-yt-cancel:".Length..]);
+
+        if (_pendingYtDlpDownloads.TryGetValue(requestId, out var cts))
+        {
+            cts.Cancel();
+            logger.LogInformation("User {User} cancelled /download-yt request {RequestId}", component.User.Username, requestId);
+        }
+
+        return component.DeferAsync();
     }
 
     private static Embed BuildDownloadYtProgressEmbed(string url, bool hasStarted, double percent, int? playlistIndex, int? playlistTotal)
@@ -779,7 +820,9 @@ public sealed class DownloadBotService(
                 "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
                 "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
                 "as-is. Shows live progress. If another /download-yt is already running, yours queues " +
-                "behind it instead of running at the same time.")
+                "behind it instead of running at the same time. Every progress message has a **Cancel** " +
+                "button — works whether that download is actively running or still queued, and anyone " +
+                "can use it, not just whoever started it.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
@@ -874,6 +917,9 @@ public sealed class DownloadBotService(
     {
         if (component.Data.CustomId.StartsWith("poller-cancel:", StringComparison.Ordinal))
             return HandlePollerCancelButtonAsync(component);
+
+        if (component.Data.CustomId.StartsWith("download-yt-cancel:", StringComparison.Ordinal))
+            return HandleDownloadYtCancelButtonAsync(component);
 
         return component.Data.CustomId switch
         {

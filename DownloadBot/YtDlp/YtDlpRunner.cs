@@ -32,7 +32,16 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
             return new YtDlpResult(false, [], "That doesn't look like a valid http(s) URL.", null);
         }
 
-        await _semaphore.WaitAsync(cancellationToken);
+        try
+        {
+            await _semaphore.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled while still queued behind another download — never actually started.
+            return new YtDlpResult(false, [], "Cancelled.", null);
+        }
+
         try
         {
             return await RunAsync(url, destinationDirectory, progress, onStarted, cancellationToken);
@@ -139,10 +148,16 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         }
         catch (OperationCanceledException)
         {
-            logger.LogWarning("yt-dlp timed out after {TimeoutMinutes}m for {Url}; killing process tree", opts.TimeoutMinutes, url);
+            // The linked token fires for two different reasons — the caller's own token (a user hit
+            // Cancel) or the timeout (CancelAfter) — distinguish them so the reported reason is accurate.
+            var wasUserCancelled = cancellationToken.IsCancellationRequested;
+            logger.LogWarning("yt-dlp {Reason} for {Url}; killing process tree",
+                wasUserCancelled ? "was cancelled" : $"timed out after {opts.TimeoutMinutes}m", url);
             TryKillProcessTree(process);
             await Task.WhenAll(SafeAwait(stdoutTask), SafeAwait(stderrTask));
-            return new YtDlpResult(false, [], $"Download timed out after {opts.TimeoutMinutes} minute(s).", JoinTail(stderrTail));
+            return wasUserCancelled
+                ? new YtDlpResult(false, [], "Cancelled.", JoinTail(stderrTail))
+                : new YtDlpResult(false, [], $"Download timed out after {opts.TimeoutMinutes} minute(s).", JoinTail(stderrTail));
         }
 
         await Task.WhenAll(stdoutTask, stderrTask);
