@@ -264,7 +264,8 @@ public sealed class DownloadBotService(
         var driveCheckCommand = new SlashCommandBuilder()
             .WithName("drive-check")
             .WithDescription("Show free space on attached drives (excludes C:)")
-            .AddOption("drive", ApplicationCommandOptionType.String, "Optional: check only this drive letter (e.g. G)", isRequired: false)
+            .AddOption("drive", ApplicationCommandOptionType.String, "Optional: check only this drive letter (e.g. G)",
+                isRequired: false, isAutocomplete: true)
             .Build();
 
         var activeDownloadsCommand = new SlashCommandBuilder()
@@ -728,26 +729,14 @@ public sealed class DownloadBotService(
     {
         try
         {
-            if (!YoutubeFolderAutocompleteTargets.Contains((interaction.Data.CommandName, interaction.Data.Current.Name)))
-            {
-                await interaction.RespondAsync([]);
-                return;
-            }
-
             var partial = interaction.Data.Current.Value as string ?? "";
 
-            if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath) || !Directory.Exists(youtubePath))
+            IEnumerable<AutocompleteResult> matches = (interaction.Data.CommandName, interaction.Data.Current.Name) switch
             {
-                await interaction.RespondAsync([]);
-                return;
-            }
-
-            var matches = Directory.GetDirectories(youtubePath)
-                .Select(Path.GetFileName)
-                .Where(name => !string.IsNullOrEmpty(name) && name.Contains(partial, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-                .Take(25)
-                .Select(name => new AutocompleteResult(name!, name!));
+                ("drive-check", "drive") => GetDriveAutocompleteMatches(partial),
+                var key when YoutubeFolderAutocompleteTargets.Contains(key) => GetYoutubeFolderAutocompleteMatches(partial),
+                _ => []
+            };
 
             await interaction.RespondAsync(matches);
         }
@@ -765,6 +754,26 @@ public sealed class DownloadBotService(
             }
         }
     }
+
+    private IEnumerable<AutocompleteResult> GetYoutubeFolderAutocompleteMatches(string partial)
+    {
+        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath) || !Directory.Exists(youtubePath))
+            return [];
+
+        return Directory.GetDirectories(youtubePath)
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrEmpty(name) && name.Contains(partial, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Take(25)
+            .Select(name => new AutocompleteResult(name!, name!));
+    }
+
+    private IEnumerable<AutocompleteResult> GetDriveAutocompleteMatches(string partial) =>
+        driveSpaceChecker.GetFreeSpace()
+            .Where(d => d.Name.Contains(partial, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(25)
+            .Select(d => new AutocompleteResult($"{d.Name} ({d.FreeGb:F0} GB free)", d.Name));
 
     private static Embed BuildDownloadYtProgressEmbed(string url, bool hasStarted, double percent, int? playlistIndex, int? playlistTotal)
     {
