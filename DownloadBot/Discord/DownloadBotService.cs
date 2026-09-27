@@ -1044,18 +1044,20 @@ public sealed class DownloadBotService(
     private async Task SearchAndPostPickerAsync(SocketSlashCommand command, string title, string type)
     {
         IReadOnlyList<SearchResult> results;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             results = await jackett.SearchAsync(title);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Jackett search failed for query {Query}", title);
+            logger.LogError(ex, "Jackett search failed for query {Query} after {ElapsedMs}ms", title, stopwatch.ElapsedMilliseconds);
             await command.FollowupAsync($"Search failed: {ex.Message}");
             return;
         }
 
-        logger.LogInformation("Jackett returned {Count} result(s) for {Query}", results.Count, title);
+        logger.LogInformation("Jackett returned {Count} result(s) for {Query} in {ElapsedMs}ms",
+            results.Count, title, stopwatch.ElapsedMilliseconds);
 
         if (results.Count == 0)
         {
@@ -1073,15 +1075,19 @@ public sealed class DownloadBotService(
     private async Task<bool> PostDuplicateConfirmationIfFoundAsync(SocketSlashCommand command, string title, string type)
     {
         IReadOnlyList<string> matches;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             matches = await libraryScanner.FindExistingAsync(title, type);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Library duplicate check failed for \"{Title}\"; proceeding with search anyway", title);
+            logger.LogWarning(ex, "Library duplicate check failed for \"{Title}\" after {ElapsedMs}ms; proceeding with search anyway",
+                title, stopwatch.ElapsedMilliseconds);
             return false;
         }
+
+        logger.LogInformation("Library duplicate check for \"{Title}\" took {ElapsedMs}ms", title, stopwatch.ElapsedMilliseconds);
 
         if (matches.Count == 0)
             return false;
