@@ -13,11 +13,10 @@ public sealed class JackettClient(HttpClient httpClient, Microsoft.Extensions.Op
 {
     private static readonly XNamespace Torznab = "http://torznab.com/schemas/2015/feed";
 
-    public async Task<IReadOnlyList<SearchResult>> SearchAsync(string query, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<SearchResult>> SearchAsync(string query, string? imdbId = null, CancellationToken cancellationToken = default)
     {
         var opts = options.Value;
-        var url = $"{opts.BaseUrl.TrimEnd('/')}/api/v2.0/indexers/{opts.Indexers}/results/torznab/" +
-                   $"?apikey={Uri.EscapeDataString(opts.ApiKey)}&t=search&q={Uri.EscapeDataString(query)}";
+        var url = JackettQueryBuilder.BuildSearchUrl(opts.BaseUrl, opts.ApiKey, opts.Indexers, query, imdbId);
 
         using var response = await httpClient.GetAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();

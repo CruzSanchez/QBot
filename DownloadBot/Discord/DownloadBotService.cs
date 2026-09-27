@@ -53,7 +53,7 @@ public sealed class DownloadBotService(
 
     private sealed record PendingPick(string Type, IReadOnlyList<SearchResult> Results);
 
-    private sealed record PendingDuplicateConfirmation(SocketSlashCommand Command, string Title, string Type);
+    private sealed record PendingDuplicateConfirmation(SocketSlashCommand Command, string Title, string Type, string? ImdbId = null);
 
     private sealed record PendingSpaceConfirmation(SearchResult Picked, string Type);
 
@@ -247,6 +247,8 @@ public sealed class DownloadBotService(
             .WithDescription("Search indexers and queue a download")
             .AddOption("title", ApplicationCommandOptionType.String, "Title to search for", isRequired: true)
             .AddOption("type", ApplicationCommandOptionType.String, "Content type", isRequired: true, choices: TypeChoices)
+            .AddOption("imdbid", ApplicationCommandOptionType.String,
+                "Optional: search by IMDb ID (e.g. tt0133093) for a more precise match", isRequired: false)
             .Build();
 
         var downloadManyCommand = new SlashCommandBuilder()
@@ -962,10 +964,12 @@ public sealed class DownloadBotService(
         var embed = new EmbedBuilder()
             .WithTitle("Download bot — how to use it")
             .WithDescription("Search torrent indexers from Discord and queue a download for qBittorrent to pick up automatically.")
-            .AddField("/download title type",
+            .AddField("/download title type imdbid",
                 "Search for one title. Pick your `type` (Movie, TV Shows, Kids Movie, Kids TV Shows, Music), " +
-                "then choose the exact release from the dropdown of top results (or hit Cancel to back out).\n" +
-                "Example: `/download title:Dune Part Two type:movie`")
+                "then choose the exact release from the dropdown of top results (or hit Cancel to back out). " +
+                "Optionally pass `imdbid` (e.g. `tt0133093`) to search by IMDb ID instead of a fuzzy title " +
+                "match — more precise when a title has sequels, remakes, or similarly-named releases.\n" +
+                "Example: `/download title:Dune Part Two type:movie imdbid:tt15239678`")
             .AddField("/download-many titles type",
                 "Search for several titles at once, separated by commas (or newlines). " +
                 "You get a separate picker for each title, so you still choose the exact release for every one.\n" +
@@ -1029,27 +1033,38 @@ public sealed class DownloadBotService(
         return command.RespondAsync(embed: embed, ephemeral: true);
     }
 
+    private static readonly System.Text.RegularExpressions.Regex ImdbIdPattern =
+        new(@"^tt\d{7,}$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private async Task HandleDownloadAsync(SocketSlashCommand command)
     {
         var title = (string)command.Data.Options.First(o => o.Name == "title").Value;
         var type = (string)command.Data.Options.First(o => o.Name == "type").Value;
+        var imdbId = command.Data.Options.FirstOrDefault(o => o.Name == "imdbid")?.Value as string;
 
-        logger.LogInformation("/download invoked by {User}: title={Title} type={Type}", command.User.Username, title, type);
+        if (!string.IsNullOrWhiteSpace(imdbId) && !ImdbIdPattern.IsMatch(imdbId))
+        {
+            await command.RespondAsync($"`{imdbId}` doesn't look like an IMDb ID — expected something like `tt0133093`.", ephemeral: true);
+            return;
+        }
+
+        logger.LogInformation("/download invoked by {User}: title={Title} type={Type} imdbid={ImdbId}",
+            command.User.Username, title, type, imdbId ?? "(none)");
 
         await command.DeferAsync();
 
-        if (await PostDuplicateConfirmationIfFoundAsync(command, title, type))
+        if (await PostDuplicateConfirmationIfFoundAsync(command, title, type, imdbId))
             return;
 
-        await SearchAndPostPickerAsync(command, title, type);
+        await SearchAndPostPickerAsync(command, title, type, imdbId);
     }
 
-    private async Task SearchAndPostPickerAsync(SocketSlashCommand command, string title, string type)
+    private async Task SearchAndPostPickerAsync(SocketSlashCommand command, string title, string type, string? imdbId = null)
     {
         IReadOnlyList<SearchResult> results;
         try
         {
-            results = await jackett.SearchAsync(title);
+            results = await jackett.SearchAsync(title, imdbId);
         }
         catch (Exception ex)
         {
@@ -1073,7 +1088,7 @@ public sealed class DownloadBotService(
     // Returns true (and posts a "search anyway?" confirmation instead) if something was found — this
     // is a soft warning, not a hard stop, since a duplicate title/year could still be a different cut,
     // a damaged/incomplete copy, etc.
-    private async Task<bool> PostDuplicateConfirmationIfFoundAsync(SocketSlashCommand command, string title, string type)
+    private async Task<bool> PostDuplicateConfirmationIfFoundAsync(SocketSlashCommand command, string title, string type, string? imdbId = null)
     {
         IReadOnlyList<string> matches;
         try
@@ -1103,7 +1118,7 @@ public sealed class DownloadBotService(
             .WithButton("Cancel", "dup-confirm-no", ButtonStyle.Secondary);
 
         var message = await command.FollowupAsync(embed: embed, components: buttons.Build());
-        _pendingDuplicateConfirmations[message.Id] = new PendingDuplicateConfirmation(command, title, type);
+        _pendingDuplicateConfirmations[message.Id] = new PendingDuplicateConfirmation(command, title, type, imdbId);
         return true;
     }
 
@@ -1191,7 +1206,7 @@ public sealed class DownloadBotService(
                 m.Components = new ComponentBuilder().Build();
             });
 
-            await SearchAndPostPickerAsync(pending.Command, pending.Title, pending.Type);
+            await SearchAndPostPickerAsync(pending.Command, pending.Title, pending.Type, pending.ImdbId);
         }
         catch (Exception ex)
         {
