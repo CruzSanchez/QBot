@@ -33,6 +33,11 @@ torrents directly and gets an immediate, reliable success/failure signal instead
 waiting on an RSS poll cycle. You can leave your existing rules in place (harmless)
 or remove them.
 
+Whenever anything in the app logs an Error, the bot waits 2 minutes (to let a burst
+of related errors settle, so it doesn't upload once per error) and then posts that
+day's log file to `Discord:StatusChannelId` — no need to pull logs off the server
+by hand to see what went wrong.
+
 `/download-yt url:<link>` is a separate pipeline: it shells out to
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) to download a video or playlist (YouTube
 and hundreds of other sites) and saves it to the active drive's Youtube folder —
@@ -156,6 +161,11 @@ DownloadBot/
     ├── TorrentNameMatcher.cs         // fuzzy name matching when a hash isn't known upfront
     ├── MagnetHash.cs                 // pulls the btih hash out of a magnet URI
     └── CompletionPollerService.cs    // polls qBittorrent, posts completion/stall/error alerts to Discord
+├── Diagnostics/
+│   ├── ErrorSignal.cs                 // static event bridging Serilog (Program.cs) to the upload service
+│   ├── ErrorSignalSink.cs             // Serilog sink — raises ErrorSignal on Error-level+ events
+│   ├── ErrorLogFileLocator.cs         // pure "today's rolling log file path" resolution
+│   └── ErrorLogUploadService.cs       // debounces (2 min) then uploads the log file to Discord:StatusChannelId
 └── YtDlp/
     ├── YtDlpOptions.cs                // executable/ffmpeg paths, quality/retry/archive/cookies/SponsorBlock defaults
     ├── YtDlpProgressParser.cs         // pure "[download] NN.N%" / "video X of Y" line parsing
@@ -168,6 +178,6 @@ DownloadBot/
     └── YtDlpRunner.cs                 // runs the process, streams progress, kills tree on timeout
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector, YtDlpArgumentBuilder, FolderNameSanitizer, YoutubeFolderResolver
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector, YtDlpArgumentBuilder, FolderNameSanitizer, YoutubeFolderResolver, ErrorLogFileLocator
 └── Integration/                      // live Jackett/qBittorrent/Discord/yt-dlp checks, self-skipping
 ```

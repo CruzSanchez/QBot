@@ -292,3 +292,21 @@ progress updates and the final result — that message has no expiration and
 is edited via the regular REST API, not the interaction's webhook. Any
 future update failure is now logged at Warning, not Debug, so it won't go
 unnoticed again.
+
+## Error-triggered log upload (2026-09-27)
+
+Whenever anything anywhere in the app logs an Error (or worse), the bot
+waits 2 minutes — a debounce window, so a burst of related errors (e.g. one
+root failure causing several follow-on error logs) results in a single
+upload, not one per error — then uploads that day's rolling log file
+(`logs/downloadbot-YYYYMMDD.log`) to **`Discord:StatusChannelId`** (the same
+channel connect/disconnect notices already go to — no new config needed).
+- [ ] If you'd rather this go to a *different* channel than
+      `StatusChannelId`, say so — currently it deliberately reuses that
+      config value rather than adding a duplicate one, since you gave the
+      same channel ID for this that's already configured there.
+- Only one upload timer runs at a time; more errors arriving while one's
+  already pending don't restart or stack additional timers/uploads.
+- If the channel can't be resolved, or the log file isn't found for some
+  reason, it logs a warning and gives up silently rather than retrying
+  indefinitely — the next Error anywhere will start a fresh attempt anyway.

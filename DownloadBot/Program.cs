@@ -1,4 +1,5 @@
 using global::Discord.WebSocket;
+using DownloadBot.Diagnostics;
 using DownloadBot.Discord;
 using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
@@ -16,6 +17,10 @@ Log.Logger = new LoggerConfiguration()
         "logs/downloadbot-.log",
         rollingInterval: RollingInterval.Day,
         outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}")
+    // Doesn't write anything itself — just notifies ErrorLogUploadService whenever anything logs an
+    // Error (or worse), anywhere in the app, so that service can debounce and ship the log file to
+    // Discord without every logger call site needing to know it exists.
+    .WriteTo.Sink(new ErrorSignalSink())
     .CreateLogger();
 
 try
@@ -54,6 +59,7 @@ try
     builder.Services.AddHostedService<DownloadBotService>();
     builder.Services.AddHostedService<CompletionPollerService>();
     builder.Services.AddHostedService<DashboardService>();
+    builder.Services.AddHostedService<ErrorLogUploadService>();
 
     var app = builder.Build();
 
