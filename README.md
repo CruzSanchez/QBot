@@ -2,9 +2,7 @@
 
 Single .NET process running a Discord bot. `/download` searches Jackett, lets you
 pick a result, checks your Plex library for an existing copy first, and adds the
-chosen release directly to qBittorrent via its Web API. Pass `imdbid` (e.g.
-`tt0133093`) to search by IMDb ID instead of a fuzzy title match — more precise
-when a title has sequels, remakes, or similarly-named releases.
+chosen release directly to qBittorrent via its Web API.
 
 ```
 Discord /download → local library check ("already have this?") → Jackett search
@@ -146,8 +144,7 @@ DownloadBot/
 ├── Search/
 │   ├── SearchResult.cs
 │   ├── IJackettClient.cs
-│   ├── JackettQueryBuilder.cs         // pure Torznab search-URL assembly (title or IMDb ID)
-│   └── JackettClient.cs              // HTTP call + Torznab result parsing
+│   └── JackettClient.cs              // Torznab search URL + HTTP call + result parsing
 ├── LocalLibrary/
 │   ├── TitleYear.cs                  // parses "<title> <year>" from a query or folder name
 │   ├── LibraryFolderScanner.cs       // title/year matching core, testable against any path
@@ -181,6 +178,6 @@ DownloadBot/
     └── YtDlpRunner.cs                 // runs the process, streams progress, kills tree on timeout
 
 DownloadBot.Tests/
-├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector, YtDlpArgumentBuilder, FolderNameSanitizer, YoutubeFolderResolver, ErrorLogFileLocator, JackettQueryBuilder
+├── Unit/                             // TitleYear, MagnetHash, TorrentNameMatcher, LibraryFolderScanner, PlexLibraryScanner, StallDetector, DownloadTrackingStore, ActiveDriveStore, DashboardFormatter, YtDlpProgressParser, YtDlpFormatSelector, YtDlpArgumentBuilder, FolderNameSanitizer, YoutubeFolderResolver, ErrorLogFileLocator
 └── Integration/                      // live Jackett/qBittorrent/Discord/yt-dlp checks, self-skipping
 ```

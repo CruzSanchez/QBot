@@ -311,21 +311,3 @@ channel connect/disconnect notices already go to — no new config needed).
   reason, it logs a warning and gives up silently rather than retrying
   indefinitely — the next Error anywhere will start a fresh attempt anyway.
 
-## /download can search by IMDb ID (2026-09-27)
-
-New optional `imdbid` argument on `/download` (e.g. `tt0133093`) — switches
-the Jackett/Torznab query from a fuzzy title search (`t=search&q=...`) to
-`t=movie&imdbid=...&q=...`, which most indexers use as the primary match
-and fall back to the title text only if they don't support IMDb lookups
-natively. Useful when a title has sequels, remakes, or similarly-named
-releases that a plain text search can't reliably disambiguate.
-- Validated client-side against `^tt\d{7,}$` (case-insensitive) before
-  ever reaching Jackett — an invalid value is rejected immediately with a
-  clear message instead of silently searching without it.
-- Not added to `/download-many`, since a batch of different titles doesn't
-  map to a single IMDb ID.
-- This is IMDb-ID-for-movies specifically (Torznab's `t=movie` category).
-  TV shows also get IMDb-prefixed IDs, but Torznab's TV search category
-  normally expects a `tvdbid`/`rid` instead — say so if you want IMDb-ID
-  search extended to TV as well; that would need different handling than
-  what's built here.
