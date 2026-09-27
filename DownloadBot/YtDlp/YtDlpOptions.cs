@@ -23,8 +23,9 @@ public sealed class YtDlpOptions
     public int TimeoutMinutes { get; set; } = 30;
 
     // Passed as --max-downloads — caps a playlist URL at this many videos so an accidental
-    // (or huge) playlist link can't run unbounded. A single video always counts as 1.
-    public int MaxDownloadsPerInvocation { get; set; } = 25;
+    // (or huge) playlist link can't run unbounded. A single video always counts as 1. Used when
+    // /download-yt's "maxdownloads" option is left unset; that option can override it per-download.
+    public int MaxDownloadsPerInvocation { get; set; } = 100;
 
     // Path to a Netscape-format cookies.txt, passed as --cookies. Blank (default) means no
     // authentication — fine for public videos, but age-restricted/members-only/private content needs

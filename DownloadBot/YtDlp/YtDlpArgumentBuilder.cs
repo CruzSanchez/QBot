@@ -6,14 +6,17 @@ namespace DownloadBot.YtDlp;
 // rather than assembling its arguments.
 public static class YtDlpArgumentBuilder
 {
+    // maxDownloads: null uses options.MaxDownloadsPerInvocation; otherwise overrides it for just this
+    // invocation (/download-yt's "maxdownloads" option) — e.g. a specific large playlist that needs
+    // more than the configured default without raising it globally.
     public static IReadOnlyList<string> Build(
-        string url, string destinationDirectory, string? folderName, string? quality, YtDlpOptions options)
+        string url, string destinationDirectory, string? folderName, string? quality, int? maxDownloads, YtDlpOptions options)
     {
         var args = new List<string>
         {
             "-f", YtDlpFormatSelector.Build(quality, options.DefaultMaxHeight),
             "--merge-output-format", options.MergeOutputFormat,
-            "--max-downloads", options.MaxDownloadsPerInvocation.ToString(),
+            "--max-downloads", (maxDownloads ?? options.MaxDownloadsPerInvocation).ToString(),
             // A private/deleted/age-restricted video partway through a playlist shouldn't abort the
             // whole thing — skip it and keep going.
             "--ignore-errors",

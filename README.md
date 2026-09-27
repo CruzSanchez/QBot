@@ -47,9 +47,13 @@ parallel. Folder names only ever get letters, digits, spaces, `-`, or `_` —
 anything else is cleaned up automatically instead of erroring. `/rename-folder`
 renames an existing folder under the active drive's Youtube folder (autocompletes
 the folder to pick). A private/deleted/restricted video partway through a
-playlist is skipped rather than failing the whole thing. Also configurable:
-cookies (for age-restricted content), a download archive (skips videos already
-grabbed on a previous run), SponsorBlock segment removal, and retry count — see
+playlist is skipped rather than failing the whole thing. A playlist is capped
+at `YtDlp:MaxDownloadsPerInvocation` (default 100) per run — `maxdownloads`
+overrides that for one download; re-running the same URL later skips what's
+already downloaded (via the download archive) and continues instead of
+starting over. Also configurable: cookies (for age-restricted content), a
+download archive (skips videos already grabbed on a previous run), SponsorBlock
+segment removal, and retry count — see
 [CLARIFICATIONS.md](CLARIFICATIONS.md) for yt-dlp/ffmpeg setup and all of these.
 
 ## Setup

@@ -25,6 +25,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         string destinationDirectory,
         string? folderName,
         string? quality,
+        int? maxDownloads,
         IProgress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>? progress,
         Action? onStarted,
         CancellationToken cancellationToken)
@@ -46,7 +47,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
         try
         {
-            return await RunAsync(url, destinationDirectory, folderName, quality, progress, onStarted, cancellationToken);
+            return await RunAsync(url, destinationDirectory, folderName, quality, maxDownloads, progress, onStarted, cancellationToken);
         }
         finally
         {
@@ -59,6 +60,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         string destinationDirectory,
         string? folderName,
         string? quality,
+        int? maxDownloads,
         IProgress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>? progress,
         Action? onStarted,
         CancellationToken cancellationToken)
@@ -82,7 +84,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
             CreateNoWindow = true
         };
 
-        foreach (var arg in YtDlpArgumentBuilder.Build(url, destinationDirectory, folderName, quality, opts))
+        foreach (var arg in YtDlpArgumentBuilder.Build(url, destinationDirectory, folderName, quality, maxDownloads, opts))
             startInfo.ArgumentList.Add(arg);
 
         using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };

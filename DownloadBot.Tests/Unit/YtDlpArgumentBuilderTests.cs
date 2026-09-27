@@ -20,7 +20,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_AlwaysEndsWithSeparatorThenUrl()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com/watch?v=x", "C:\\dest", null, null, Options());
+        var args = YtDlpArgumentBuilder.Build("https://example.com/watch?v=x", "C:\\dest", null, null, null, Options());
 
         Assert.Equal("--", args[^2]);
         Assert.Equal("https://example.com/watch?v=x", args[^1]);
@@ -29,7 +29,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_AlwaysIncludesIgnoreErrorsAndRetries()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, Options(o => o.Retries = 3));
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null, Options(o => o.Retries = 3));
 
         Assert.Contains("--ignore-errors", args);
         AssertFollowedBy(args, "--retries", "3");
@@ -39,7 +39,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_OmitsCookiesWhenNotConfigured()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, Options());
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null, Options());
 
         Assert.DoesNotContain("--cookies", args);
     }
@@ -47,7 +47,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_IncludesCookiesWhenConfigured()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null,
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null,
             Options(o => o.CookiesFilePath = "C:\\cookies.txt"));
 
         AssertFollowedBy(args, "--cookies", "C:\\cookies.txt");
@@ -56,7 +56,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_OmitsDownloadArchiveWhenNotConfigured()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, Options());
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null, Options());
 
         Assert.DoesNotContain("--download-archive", args);
     }
@@ -64,7 +64,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_IncludesDownloadArchiveWhenConfigured()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null,
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null,
             Options(o => o.DownloadArchivePath = "data/archive.txt"));
 
         AssertFollowedBy(args, "--download-archive", "data/archive.txt");
@@ -73,7 +73,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_OmitsSponsorBlockWhenNotConfigured()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, Options());
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null, Options());
 
         Assert.DoesNotContain("--sponsorblock-remove", args);
     }
@@ -81,7 +81,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_IncludesSponsorBlockWhenConfigured()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null,
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null,
             Options(o => o.SponsorBlockRemoveCategories = "sponsor,selfpromo"));
 
         AssertFollowedBy(args, "--sponsorblock-remove", "sponsor,selfpromo");
@@ -90,7 +90,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_OmitsFfmpegLocationWhenNotConfigured()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, Options());
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null, Options());
 
         Assert.DoesNotContain("--ffmpeg-location", args);
     }
@@ -98,7 +98,7 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_UsesTitleTokenForDefaultFolder()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, Options());
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null, Options());
 
         var outputIndex = args.ToList().IndexOf("-o");
         Assert.Equal(Path.Combine("C:\\dest", "%(title)s", "%(title)s.%(ext)s"), args[outputIndex + 1]);
@@ -107,10 +107,28 @@ public class YtDlpArgumentBuilderTests
     [Fact]
     public void Build_SanitizesUserSuppliedFolderName()
     {
-        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", "Rocket: League", null, Options());
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", "Rocket: League", null, null, Options());
 
         var outputIndex = args.ToList().IndexOf("-o");
         Assert.Equal(Path.Combine("C:\\dest", "Rocket League", "%(title)s.%(ext)s"), args[outputIndex + 1]);
+    }
+
+    [Fact]
+    public void Build_WithNullMaxDownloads_UsesConfiguredDefault()
+    {
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, null,
+            Options(o => o.MaxDownloadsPerInvocation = 100));
+
+        AssertFollowedBy(args, "--max-downloads", "100");
+    }
+
+    [Fact]
+    public void Build_WithMaxDownloadsOverride_UsesOverrideInsteadOfConfiguredDefault()
+    {
+        var args = YtDlpArgumentBuilder.Build("https://example.com", "C:\\dest", null, null, 80,
+            Options(o => o.MaxDownloadsPerInvocation = 25));
+
+        AssertFollowedBy(args, "--max-downloads", "80");
     }
 
     private static void AssertFollowedBy(IReadOnlyList<string> args, string flag, string value)

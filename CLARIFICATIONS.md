@@ -195,9 +195,14 @@ pushing something else, or they'll be silently wiped on the next deploy.
   than building a second, parallel save-path config section for one content
   type. Say so if you'd rather it live elsewhere.
 - **Playlists are supported**, capped at `YtDlp:MaxDownloadsPerInvocation`
-  (default 25) via yt-dlp's own `--max-downloads`, so a huge/accidental
+  (default 100, raised 2026-09-27 from 25 after a real 80-video playlist
+  hit the old cap) via yt-dlp's own `--max-downloads`, so a huge/accidental
   playlist link can't run unbounded — anything past the cap is just not
-  downloaded, no error.
+  downloaded, no error. `/download-yt`'s `maxdownloads` option (1–500)
+  overrides this per-download without changing the global default.
+  Combined with the download archive above: re-running the same playlist
+  URL after hitting the cap skips what's already downloaded and continues
+  with the next batch, rather than starting over.
 - **A private/deleted/age-restricted video partway through a playlist no
   longer fails the whole download** (2026-09-27) — `--ignore-errors` skips
   it and keeps going; the result is reported as a success listing whatever

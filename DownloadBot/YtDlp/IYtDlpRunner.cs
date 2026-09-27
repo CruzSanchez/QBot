@@ -10,11 +10,15 @@ public interface IYtDlpRunner
     // quality: null uses YtDlpOptions.DefaultMaxHeight (1080p unless configured otherwise); "best"
     // downloads uncapped (whatever the source's highest available is, e.g. 4K/8K); otherwise a
     // numeric string ("720", "1080", "2160", ...) caps at that height.
+    //
+    // maxDownloads: null uses YtDlpOptions.MaxDownloadsPerInvocation; otherwise overrides the playlist
+    // item cap for just this download.
     Task<YtDlpResult> DownloadAsync(
         string url,
         string destinationDirectory,
         string? folderName,
         string? quality,
+        int? maxDownloads,
         IProgress<(double Percent, int? PlaylistIndex, int? PlaylistTotal)>? progress,
         Action? onStarted,
         CancellationToken cancellationToken);

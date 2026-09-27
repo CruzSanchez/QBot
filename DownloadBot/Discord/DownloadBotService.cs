@@ -307,6 +307,9 @@ public sealed class DownloadBotService(
                 "Create a new folder with this name and add it there", isRequired: false)
             .AddOption("quality", ApplicationCommandOptionType.String,
                 "Max resolution — defaults to 1080p (or best available below it)", isRequired: false, choices: qualityChoices)
+            .AddOption("maxdownloads", ApplicationCommandOptionType.Integer,
+                "Override the playlist video cap for just this download (default: config value)",
+                isRequired: false, minValue: 1, maxValue: 500)
             .Build();
 
         var renameFolderCommand = new SlashCommandBuilder()
@@ -511,9 +514,10 @@ public sealed class DownloadBotService(
             : null;
 
         var quality = command.Data.Options.FirstOrDefault(o => o.Name == "quality")?.Value as string;
+        var maxDownloads = (int?)(command.Data.Options.FirstOrDefault(o => o.Name == "maxdownloads")?.Value as long?);
 
-        logger.LogInformation("/download-yt invoked by {User}: url={Url} folder={Folder} quality={Quality}",
-            command.User.Username, url, folderName ?? "(none)", quality ?? "(default)");
+        logger.LogInformation("/download-yt invoked by {User}: url={Url} folder={Folder} quality={Quality} maxdownloads={MaxDownloads}",
+            command.User.Username, url, folderName ?? "(none)", quality ?? "(default)", maxDownloads?.ToString() ?? "(default)");
 
         var requestId = Guid.NewGuid();
         using var cts = new CancellationTokenSource();
@@ -558,7 +562,7 @@ public sealed class DownloadBotService(
                 playlistTotal = p.PlaylistTotal;
             });
 
-            var downloadTask = ytDlp.DownloadAsync(url, savePath, folderName, quality, progress, () => hasStarted = true, cts.Token);
+            var downloadTask = ytDlp.DownloadAsync(url, savePath, folderName, quality, maxDownloads, progress, () => hasStarted = true, cts.Token);
             var cancelButton = BuildDownloadYtCancelButton(requestId);
 
             var statusMessage = await command.Channel.SendMessageAsync(
@@ -987,7 +991,7 @@ public sealed class DownloadBotService(
                 "Shows free space on each configured drive and lets you pick which one new /download " +
                 "adds are saved to (they all mirror the same folder layout, just under a different " +
                 "letter). Doesn't move or affect anything already downloading.")
-            .AddField("/download-yt url addtofolder newfoldername quality",
+            .AddField("/download-yt url addtofolder newfoldername quality maxdownloads",
                 "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
                 "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
                 "as-is. You get a quick private acknowledgment, then a separate public message below " +
@@ -1005,6 +1009,9 @@ public sealed class DownloadBotService(
                 "Defaults to 1080p (or the best available below it) if left blank. Folder names only " +
                 "ever get letters, digits, spaces, `-`, or `_` — anything else typed (or in a video's " +
                 "title) gets replaced automatically, no error.\n" +
+                "A playlist link is capped at `YtDlp:MaxDownloadsPerInvocation` videos per run (a safety " +
+                "net against a huge/accidental playlist) — `maxdownloads` overrides that cap for just " +
+                "this download (1–500) if you actually want more/fewer than the default.\n" +
                 "Example: `/download-yt url:<link> newfoldername:Rocket League Montage quality:4K`")
             .AddField("/rename-folder folder newname",
                 "Renames a folder under the active drive's Youtube folder. Pick the folder (start " +
