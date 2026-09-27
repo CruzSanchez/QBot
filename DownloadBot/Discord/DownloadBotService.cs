@@ -992,27 +992,14 @@ public sealed class DownloadBotService(
                 "adds are saved to (they all mirror the same folder layout, just under a different " +
                 "letter). Doesn't move or affect anything already downloading.")
             .AddField("/download-yt url addtoexistingfolder createnewfolder quality maxdownloads",
-                "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
-                "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
-                "as-is. You get a quick private acknowledgment, then a separate public message below " +
-                "shows live progress (this avoids a Discord limitation where very long downloads would " +
-                "otherwise stop being able to update). If another /download-yt is already running, " +
-                "yours queues behind it instead of running at the same time. Every progress message has " +
-                "a **Cancel** button — works whether that download is actively running or still queued, " +
-                "and anyone can use it, not just whoever started it.\n" +
-                "By default each video gets its own folder (named after its title) — Plex generally " +
-                "wants that instead of a flat pile of files. To instead group several related videos " +
-                "into one shared folder (e.g. a montage series acting as one Plex show), pass either " +
-                "`addtoexistingfolder` (pick an existing folder — start typing to search) or " +
-                "`createnewfolder` (create one) — not both.\n" +
-                "`quality` picks a max resolution — 1080p, 4K, 720p, or best available uncapped. " +
-                "Defaults to 1080p (or the best available below it) if left blank. Folder names only " +
-                "ever get letters, digits, spaces, `-`, or `_` — anything else typed (or in a video's " +
-                "title) gets replaced automatically, no error.\n" +
-                "A playlist link is capped at `YtDlp:MaxDownloadsPerInvocation` videos per run (a safety " +
-                "net against a huge/accidental playlist) — `maxdownloads` overrides that cap for just " +
-                "this download (1–500) if you actually want more/fewer than the default.\n" +
-                "Example: `/download-yt url:<link> createnewfolder:Rocket League Montage quality:4K`")
+                "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp, saved " +
+                "to the active drive's Youtube folder. Shows live progress with a **Cancel** button; a " +
+                "second /download-yt queues behind one already running.\n" +
+                "Each video gets its own folder by default — pass `addtoexistingfolder` (pick one) or " +
+                "`createnewfolder` (make one) to group several into one shared folder instead.\n" +
+                "`quality` caps resolution (1080p default, or 4K/720p/best). `maxdownloads` overrides " +
+                "the playlist item cap (`YtDlp:MaxDownloadsPerInvocation`) for just this download.\n" +
+                "Example: `/download-yt url:<link> createnewfolder:Montage quality:4K`")
             .AddField("/rename-folder folder newname",
                 "Renames a folder under the active drive's Youtube folder. Pick the folder (start " +
                 "typing to search) and type the new name — same character rules as above apply, so an " +
