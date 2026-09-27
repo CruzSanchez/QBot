@@ -45,8 +45,8 @@ by hand to see what went wrong.
 and hundreds of other sites) and saves it to the active drive's Youtube folder —
 no Jackett/qBittorrent involved. Each video gets its own folder (named after its
 title) by default, since Plex generally won't pick up a flat pile of video files —
-pass `addtofolder` (autocompletes against existing folders) or `newfoldername`
-(creates one) to instead group several related videos together (e.g. a montage
+pass `addtoexistingfolder` (autocompletes against existing folders) or
+`createnewfolder` (creates one) to instead group several related videos together (e.g. a montage
 series acting as one Plex show). `quality` caps the resolution (1080p by default,
 or 4K/720p/best available uncapped). Shows live progress with a Cancel button; a
 second `/download-yt` queues behind one already running instead of running in

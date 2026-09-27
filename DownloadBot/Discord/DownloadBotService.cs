@@ -303,9 +303,9 @@ public sealed class DownloadBotService(
             .WithName("download-yt")
             .WithDescription("Download a video (or playlist) via yt-dlp and save it to disk")
             .AddOption("url", ApplicationCommandOptionType.String, "Video or playlist URL", isRequired: true)
-            .AddOption("addtofolder", ApplicationCommandOptionType.String,
+            .AddOption("addtoexistingfolder", ApplicationCommandOptionType.String,
                 "Add to an existing folder — start typing to search", isRequired: false, isAutocomplete: true)
-            .AddOption("newfoldername", ApplicationCommandOptionType.String,
+            .AddOption("createnewfolder", ApplicationCommandOptionType.String,
                 "Create a new folder with this name and add it there", isRequired: false)
             .AddOption("quality", ApplicationCommandOptionType.String,
                 "Max resolution — defaults to 1080p (or best available below it)", isRequired: false, choices: qualityChoices)
@@ -502,17 +502,17 @@ public sealed class DownloadBotService(
     private async Task HandleDownloadYtAsync(SocketSlashCommand command)
     {
         var url = (string)command.Data.Options.First(o => o.Name == "url").Value;
-        var addToFolder = command.Data.Options.FirstOrDefault(o => o.Name == "addtofolder")?.Value as string;
-        var newFolderName = command.Data.Options.FirstOrDefault(o => o.Name == "newfoldername")?.Value as string;
+        var addToExistingFolder = command.Data.Options.FirstOrDefault(o => o.Name == "addtoexistingfolder")?.Value as string;
+        var createNewFolder = command.Data.Options.FirstOrDefault(o => o.Name == "createnewfolder")?.Value as string;
 
-        if (!string.IsNullOrWhiteSpace(addToFolder) && !string.IsNullOrWhiteSpace(newFolderName))
+        if (!string.IsNullOrWhiteSpace(addToExistingFolder) && !string.IsNullOrWhiteSpace(createNewFolder))
         {
-            await command.RespondAsync("Use either `addtofolder` or `newfoldername`, not both.", ephemeral: true);
+            await command.RespondAsync("Use either `addtoexistingfolder` or `createnewfolder`, not both.", ephemeral: true);
             return;
         }
 
-        var folderName = !string.IsNullOrWhiteSpace(newFolderName) ? newFolderName
-            : !string.IsNullOrWhiteSpace(addToFolder) ? addToFolder
+        var folderName = !string.IsNullOrWhiteSpace(createNewFolder) ? createNewFolder
+            : !string.IsNullOrWhiteSpace(addToExistingFolder) ? addToExistingFolder
             : null;
 
         var quality = command.Data.Options.FirstOrDefault(o => o.Name == "quality")?.Value as string;
@@ -720,11 +720,11 @@ public sealed class DownloadBotService(
     }
 
     // Live folder list instead of a fixed dropdown, since the folder list changes every time someone
-    // creates one (via newfoldername or /rename-folder) and could grow past Discord's 25-choice cap on
-    // a plain dropdown. Scoped to the active drive's Youtube folder. Shared by /download-yt's
-    // addtofolder option and /rename-folder's folder option.
+    // creates one (via createnewfolder or /rename-folder) and could grow past Discord's 25-choice cap
+    // on a plain dropdown. Scoped to the active drive's Youtube folder. Shared by /download-yt's
+    // addtoexistingfolder option and /rename-folder's folder option.
     private static readonly HashSet<(string Command, string Option)> YoutubeFolderAutocompleteTargets =
-        new() { ("download-yt", "addtofolder"), ("rename-folder", "folder") };
+        new() { ("download-yt", "addtoexistingfolder"), ("rename-folder", "folder") };
 
     private async Task OnAutocompleteExecutedAsync(SocketAutocompleteInteraction interaction)
     {
@@ -995,7 +995,7 @@ public sealed class DownloadBotService(
                 "Shows free space on each configured drive and lets you pick which one new /download " +
                 "adds are saved to (they all mirror the same folder layout, just under a different " +
                 "letter). Doesn't move or affect anything already downloading.")
-            .AddField("/download-yt url addtofolder newfoldername quality maxdownloads",
+            .AddField("/download-yt url addtoexistingfolder createnewfolder quality maxdownloads",
                 "Downloads a video or playlist (YouTube and hundreds of other sites) via yt-dlp and " +
                 "saves it to the active drive's Youtube folder — no picker, the link is downloaded " +
                 "as-is. You get a quick private acknowledgment, then a separate public message below " +
@@ -1007,8 +1007,8 @@ public sealed class DownloadBotService(
                 "By default each video gets its own folder (named after its title) — Plex generally " +
                 "wants that instead of a flat pile of files. To instead group several related videos " +
                 "into one shared folder (e.g. a montage series acting as one Plex show), pass either " +
-                "`addtofolder` (pick an existing folder — start typing to search) or `newfoldername` " +
-                "(create one) — not both.\n" +
+                "`addtoexistingfolder` (pick an existing folder — start typing to search) or " +
+                "`createnewfolder` (create one) — not both.\n" +
                 "`quality` picks a max resolution — 1080p, 4K, 720p, or best available uncapped. " +
                 "Defaults to 1080p (or the best available below it) if left blank. Folder names only " +
                 "ever get letters, digits, spaces, `-`, or `_` — anything else typed (or in a video's " +
@@ -1016,7 +1016,7 @@ public sealed class DownloadBotService(
                 "A playlist link is capped at `YtDlp:MaxDownloadsPerInvocation` videos per run (a safety " +
                 "net against a huge/accidental playlist) — `maxdownloads` overrides that cap for just " +
                 "this download (1–500) if you actually want more/fewer than the default.\n" +
-                "Example: `/download-yt url:<link> newfoldername:Rocket League Montage quality:4K`")
+                "Example: `/download-yt url:<link> createnewfolder:Rocket League Montage quality:4K`")
             .AddField("/rename-folder folder newname",
                 "Renames a folder under the active drive's Youtube folder. Pick the folder (start " +
                 "typing to search) and type the new name — same character rules as above apply, so an " +
