@@ -43,7 +43,11 @@ public sealed class CompletionPollerService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to poll qBittorrent for {Title}", download.Title);
+            // Warning, not Error: this fires routinely for a few seconds right after the bot starts if
+            // qBittorrent's WebUI isn't up yet, and self-heals on the next poll — Error would trigger the
+            // error-log-upload feature for a non-issue. A genuinely dead qBittorrent still shows up here
+            // every poll cycle, just as repeated warnings instead of an upload-triggering error.
+            logger.LogWarning(ex, "Failed to poll qBittorrent for {Title}", download.Title);
             return;
         }
 

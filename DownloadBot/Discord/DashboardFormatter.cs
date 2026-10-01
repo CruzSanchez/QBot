@@ -36,7 +36,7 @@ public static class DashboardFormatter
 
     private static string FormatLine(TorrentState t) =>
         $"**{Truncate(t.Name, 80)}**\n{ActiveDownloadFormatter.FormatProgressBar(t.Progress)} {t.Progress * 100:F1}% — " +
-        $"{ActiveDownloadFormatter.FormatSpeed(t.DownloadSpeedBytesPerSec)} — {ActiveDownloadFormatter.FormatEta(t.EtaSeconds)}";
+        $"{ActiveDownloadFormatter.FormatSpeedWithState(t.DownloadSpeedBytesPerSec, t.State)} — {ActiveDownloadFormatter.FormatEta(t.EtaSeconds)}";
 
     private static string Truncate(string value, int maxLength) =>
         value.Length <= maxLength ? value : value[..(maxLength - 1)] + "…";

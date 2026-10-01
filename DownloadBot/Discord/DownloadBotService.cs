@@ -142,6 +142,13 @@ public sealed class DownloadBotService(
         {
             await handler();
         }
+        // Warning, not Error: this means Discord's own rate limiter delayed an earlier reply past the
+        // ~3s interaction-token window, not a bug here — the token is just dead by the time we respond.
+        // Self-resolves on retry, so it shouldn't trigger the error-log-upload feature.
+        catch (global::Discord.Net.HttpException ex) when (ex.DiscordCode == global::Discord.DiscordErrorCode.UnknownInteraction)
+        {
+            logger.LogWarning(ex, "Interaction token expired before {Handler} could respond (likely rate-limited)", name);
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Unhandled exception in {Handler} event handler", name);
@@ -929,8 +936,8 @@ public sealed class DownloadBotService(
     }
 
     private static string FormatActiveDownload(TorrentState t) =>
-        $"**{Truncate(t.Name, 80)}** — {t.Progress * 100:F1}% ({t.State}) — " +
-        $"{ActiveDownloadFormatter.FormatSpeed(t.DownloadSpeedBytesPerSec)}, {ActiveDownloadFormatter.FormatEta(t.EtaSeconds)}";
+        $"**{Truncate(t.Name, 80)}** — {t.Progress * 100:F1}% — " +
+        $"{ActiveDownloadFormatter.FormatSpeedWithState(t.DownloadSpeedBytesPerSec, t.State)}, {ActiveDownloadFormatter.FormatEta(t.EtaSeconds)}";
 
     private Task HandleDriveCheckAsync(SocketSlashCommand command)
     {

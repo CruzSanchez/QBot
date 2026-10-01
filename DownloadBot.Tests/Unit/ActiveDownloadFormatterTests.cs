@@ -29,6 +29,31 @@ public class ActiveDownloadFormatterTests
     }
 
     [Theory]
+    [InlineData("metaDL", "downloading metadata")]
+    [InlineData("forcedMetaDL", "downloading metadata")]
+    [InlineData("checkingDL", "checking files")]
+    [InlineData("queuedDL", "queued")]
+    [InlineData("allocating", "allocating space")]
+    [InlineData("pausedDL", "paused")]
+    [InlineData("stalledDL", "no peers")]
+    [InlineData("downloading", "downloading")]
+    [InlineData("someUnknownState", "someUnknownState")] // unrecognized states pass through as-is
+    public void FormatStateLabel_MapsQBittorrentStatesToPlainLanguage(string state, string expected)
+    {
+        Assert.Equal(expected, ActiveDownloadFormatter.FormatStateLabel(state));
+    }
+
+    [Theory]
+    [InlineData(5 * 1024 * 1024, "stalledDL", "5.00 MB/s")] // actively transferring: state is irrelevant
+    [InlineData(0, "metaDL", "stalled — downloading metadata")]
+    [InlineData(0, "stalledDL", "stalled — no peers")]
+    [InlineData(0, "downloading", "stalled")] // redundant with "stalled" itself, so suppressed
+    public void FormatSpeedWithState_AppendsStateReasonOnlyWhenStalled(long bytesPerSec, string state, string expected)
+    {
+        Assert.Equal(expected, ActiveDownloadFormatter.FormatSpeedWithState(bytesPerSec, state));
+    }
+
+    [Theory]
     [InlineData(0.0, "[░░░░░░░░░░░░░░░░░░░░]")]
     [InlineData(1.0, "[████████████████████]")]
     [InlineData(0.5, "[██████████░░░░░░░░░░]")]
