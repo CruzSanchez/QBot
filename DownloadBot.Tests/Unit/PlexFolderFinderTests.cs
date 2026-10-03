@@ -26,6 +26,25 @@ public class PlexFolderFinderTests : IDisposable
         Assert.Equal(["Kids Movies", "Movies"], result.Select(f => f.Category));
     }
 
+    [Theory]
+    [InlineData("My name Is earl", "My.Name.Is.Earl")]
+    [InlineData("mars attacks 1996", "Mars_Attacks!-(1996)")]
+    [InlineData("hills have eyes", "The.Hills.Have.Eyes.2006.1080p.BluRay.x265")]
+    public void FindMatching_IgnoresCaseAndPunctuationInFolderNames(string search, string folderName)
+    {
+        Directory.CreateDirectory(Path.Combine(_plex, "TV Shows", folderName));
+
+        var result = PlexFolderFinder.FindMatching([_plex], search);
+
+        Assert.Contains(folderName, result.Select(f => f.Name));
+    }
+
+    [Fact]
+    public void FindMatching_PunctuationOnlySearchMatchesNothing()
+    {
+        Assert.Empty(PlexFolderFinder.FindMatching([_plex], "..."));
+    }
+
     [Fact]
     public void FindMatching_NeverReturnsCategoryFoldersOrFiles()
     {

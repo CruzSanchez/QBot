@@ -17,13 +17,14 @@ public static class PlexFolderFinder
     public static IReadOnlyList<PlexFolder> FindMatching(IEnumerable<string> plexRoots, string search, int max = 25)
     {
         var results = new List<PlexFolder>();
+        var wanted = Normalize(search);
 
         foreach (var root in plexRoots)
         foreach (var categoryDir in SafeDirectories(root))
         foreach (var itemDir in SafeDirectories(categoryDir))
         {
             var name = Path.GetFileName(itemDir);
-            if (name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            if (wanted.Length > 0 && Normalize(name).Contains(wanted, StringComparison.Ordinal))
                 results.Add(new PlexFolder(itemDir, name, Path.GetPathRoot(itemDir)!.TrimEnd('\\'), Path.GetFileName(categoryDir)));
         }
 
@@ -33,6 +34,13 @@ public static class PlexFolderFinder
             .Take(max)
             .ToList();
     }
+
+    // Release-style folder names ("My.Name.Is.Earl.S01", "Mars_Attacks-1996") rarely match what a person
+    // types, so both sides are lowercased with every run of non-letter/digit characters collapsed to one
+    // space before comparing — "my name is earl" then matches "my name is earl s01" on word boundaries.
+    public static string Normalize(string value) =>
+        string.Join(' ', value.ToLowerInvariant().Split(
+            value.Where(c => !char.IsLetterOrDigit(c)).Distinct().ToArray(), StringSplitOptions.RemoveEmptyEntries));
 
     // Last check before a recursive delete: true only for exactly <drive>\plex\<category>\<item>, and
     // never on C:. Guards against a stale or malformed path ever pointing at something broader.
