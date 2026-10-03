@@ -24,6 +24,27 @@ public class YoutubeFolderResolverTests : IDisposable
     }
 
     [Fact]
+    public void FindMatching_IsCaseInsensitiveContainsAndSorted()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "rocket science"));
+        Directory.CreateDirectory(Path.Combine(_root, "Unrelated"));
+
+        var result = YoutubeFolderResolver.FindMatching(_root, "ROCKET");
+
+        Assert.Equal(["Rocket League Montage", "rocket science"], result);
+    }
+
+    [Fact]
+    public void FindMatching_RespectsMaxAndHandlesMissingRoot()
+    {
+        for (var i = 0; i < 5; i++)
+            Directory.CreateDirectory(Path.Combine(_root, $"clip {i}"));
+
+        Assert.Equal(3, YoutubeFolderResolver.FindMatching(_root, "clip", max: 3).Count);
+        Assert.Empty(YoutubeFolderResolver.FindMatching(Path.Combine(_root, "nope"), "clip"));
+    }
+
+    [Fact]
     public void ResolveExisting_ReturnsNullForNonexistentFolder()
     {
         Assert.Null(YoutubeFolderResolver.ResolveExisting(_root, "Does Not Exist"));

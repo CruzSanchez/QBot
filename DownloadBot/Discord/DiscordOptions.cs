@@ -13,4 +13,7 @@ public sealed class DiscordOptions
     // Optional: channel for the live, auto-refreshing "active downloads" dashboard message.
     // Leave unset to disable it (DashboardService just no-ops).
     public ulong? DashboardChannelId { get; set; }
+
+    // Role allowed to use /delete (permanently removes a folder and its contents). Unset = nobody can.
+    public ulong? ModsRoleId { get; set; }
 }

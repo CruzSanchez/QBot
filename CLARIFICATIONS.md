@@ -208,10 +208,12 @@ pushing something else, or they'll be silently wiped on the next deploy.
   it and keeps going; the result is reported as a success listing whatever
   did download, plus a note on how many were skipped. Only actually fails
   if *nothing* in the playlist could be downloaded.
-- **`YtDlp:TimeoutMinutes`** (default 30) covers the *whole* invocation,
-  including a full playlist — a large playlist near the 25-item cap may
-  need a longer timeout than a single video would. Raise it if a playlist
-  download times out partway through.
+- **`YtDlp:TimeoutMinutes`** (default 30) is an *inactivity* limit
+  (changed 2026-10-03): yt-dlp is only killed if it prints nothing for that
+  long, so a big playlist that keeps making progress never times out. It
+  used to be a hard total-time cap, which killed a healthy 100-video
+  playlist run at 30 minutes. If it does go silent, the failure message says
+  how many files had finished; re-running the same URL continues from there.
 - **A second `/download-yt` queues** behind one already in progress (shown
   as "⏳ Queued" in its embed) rather than running in parallel or being
   rejected — this server also runs qBittorrent and Plex, and two
@@ -311,3 +313,18 @@ channel connect/disconnect notices already go to — no new config needed).
   reason, it logs a warning and gives up silently rather than retrying
   indefinitely — the next Error anywhere will start a fresh attempt anyway.
 
+
+## /delete — Mods-only folder deletion (2026-10-03)
+
+`/delete search:<text>` lists folders under the active drive's Youtube folder
+whose name contains the text (case-insensitive, up to 25) in a picker; picking
+one **permanently deletes the folder and everything in it** — no extra confirm
+step, by request.
+- Restricted to the role in `Discord:ModsRoleId` (set to the Mods role,
+  `1551025784460681278`). Checked on the command *and* again on the pick. If
+  `ModsRoleId` is unset, nobody can use it.
+- Scoped to the Youtube folder only (same as `/rename-folder`) — it can't touch
+  Movies/TV/Music. Names are re-resolved through the same path-traversal guard
+  as `/rename-folder` before deleting.
+- Every delete is logged at Warning with who did it. Deleting a folder that
+  yt-dlp or Plex is actively using can fail; the error is shown instead.

@@ -107,8 +107,15 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         var stderrTail = new Queue<string>();
         var skippedCount = 0;
 
+        // Inactivity timeout: every line yt-dlp prints (progress, ERROR:, anything) pushes the deadline
+        // back, so only a genuinely silent/hung process gets killed — not a long playlist that's working.
+        var inactivityLimit = TimeSpan.FromMinutes(Math.Max(1, opts.TimeoutMinutes));
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(inactivityLimit);
+
         var stdoutTask = ReadStreamAsync(process.StandardOutput, line =>
         {
+            timeoutCts.CancelAfter(inactivityLimit);
             var percent = YtDlpProgressParser.TryParsePercent(line);
             var position = YtDlpProgressParser.TryParsePlaylistPosition(line);
 
@@ -136,6 +143,7 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
 
         var stderrTask = ReadStreamAsync(process.StandardError, line =>
         {
+            timeoutCts.CancelAfter(inactivityLimit);
             stderrTail.Enqueue(line);
             while (stderrTail.Count > MaxStderrTailLines)
                 stderrTail.Dequeue();
@@ -147,9 +155,6 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
                 skippedCount++;
         });
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromMinutes(Math.Max(1, opts.TimeoutMinutes)));
-
         try
         {
             await process.WaitForExitAsync(timeoutCts.Token);
@@ -157,15 +162,18 @@ public sealed class YtDlpRunner(IOptions<YtDlpOptions> options, ILogger<YtDlpRun
         catch (OperationCanceledException)
         {
             // The linked token fires for two different reasons — the caller's own token (a user hit
-            // Cancel) or the timeout (CancelAfter) — distinguish them so the reported reason is accurate.
+            // Cancel) or the inactivity timeout (CancelAfter) — distinguish them so the reported reason is accurate.
             var wasUserCancelled = cancellationToken.IsCancellationRequested;
-            logger.LogWarning("yt-dlp {Reason} for {Url}; killing process tree",
-                wasUserCancelled ? "was cancelled" : $"timed out after {opts.TimeoutMinutes}m", url);
+            logger.LogWarning("yt-dlp {Reason} for {Url}; killing process tree ({Count} file(s) finished so far)",
+                wasUserCancelled ? "was cancelled" : $"produced no output for {opts.TimeoutMinutes}m", url, outputFilePaths.Count);
             TryKillProcessTree(process);
             await Task.WhenAll(SafeAwait(stdoutTask), SafeAwait(stderrTask));
             return wasUserCancelled
                 ? new YtDlpResult(false, [], "Cancelled.", JoinTail(stderrTail))
-                : new YtDlpResult(false, [], $"Download timed out after {opts.TimeoutMinutes} minute(s).", JoinTail(stderrTail));
+                : new YtDlpResult(false, [],
+                    $"yt-dlp went silent for {opts.TimeoutMinutes} minute(s) and was stopped ({outputFilePaths.Count} file(s) had finished). " +
+                    "Run the same URL again to continue — already-downloaded videos are skipped.",
+                    JoinTail(stderrTail));
         }
 
         await Task.WhenAll(stdoutTask, stderrTask);

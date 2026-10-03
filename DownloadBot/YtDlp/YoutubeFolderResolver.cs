@@ -16,4 +16,20 @@ public static class YoutubeFolderResolver
 
         return Directory.Exists(candidate) ? candidate : null;
     }
+
+    // Direct child folder names of root containing search (case-insensitive), alphabetical, capped at
+    // max (Discord's 25-option limit for both autocomplete and select menus).
+    public static IReadOnlyList<string> FindMatching(string root, string search, int max = 25)
+    {
+        if (!Directory.Exists(root))
+            return [];
+
+        return Directory.GetDirectories(root)
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrEmpty(name) && name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Take(max)
+            .Select(name => name!)
+            .ToList();
+    }
 }

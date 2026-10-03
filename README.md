@@ -51,7 +51,8 @@ second `/download-yt` queues behind one already running instead of running in
 parallel. Folder names only ever get letters, digits, spaces, `-`, or `_` —
 anything else is cleaned up automatically instead of erroring. `/rename-folder`
 renames an existing folder under the active drive's Youtube folder (autocompletes
-the folder to pick). A private/deleted/restricted video partway through a
+the folder to pick). `/delete search` (Mods role only, `Discord:ModsRoleId`) lists
+matching folders there and permanently deletes the one you pick. A private/deleted/restricted video partway through a
 playlist is skipped rather than failing the whole thing. A playlist is capped
 at `YtDlp:MaxDownloadsPerInvocation` (default 100) per run — `maxdownloads`
 overrides that for one download; re-running the same URL later skips what's

@@ -43,6 +43,9 @@ public sealed class DownloadBotService(
     // whoever added it), keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, IReadOnlyList<TorrentState>> _pendingCancelPicks = new();
 
+    // /delete's "which folder?" picker options (folder names under the Youtube folder), keyed by that message's id.
+    private readonly ConcurrentDictionary<ulong, IReadOnlyList<string>> _pendingDeletePicks = new();
+
     // /cancel's "remove, remove+delete, or nevermind?" confirmations, keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, TorrentState> _pendingCancelConfirmations = new();
 
@@ -328,6 +331,12 @@ public sealed class DownloadBotService(
             .AddOption("newname", ApplicationCommandOptionType.String, "New name for the folder", isRequired: true)
             .Build();
 
+        var deleteCommand = new SlashCommandBuilder()
+            .WithName("delete")
+            .WithDescription("Mods only: delete a folder (and everything in it) from the Youtube folder")
+            .AddOption("search", ApplicationCommandOptionType.String, "Part of the folder name to look for", isRequired: true)
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -342,6 +351,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(switchDriveCommand, guildId);
                 await client.Rest.CreateGuildCommand(downloadYtCommand, guildId);
                 await client.Rest.CreateGuildCommand(renameFolderCommand, guildId);
+                await client.Rest.CreateGuildCommand(deleteCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -356,6 +366,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(switchDriveCommand);
                 await client.Rest.CreateGlobalCommand(downloadYtCommand);
                 await client.Rest.CreateGlobalCommand(renameFolderCommand);
+                await client.Rest.CreateGlobalCommand(deleteCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -423,6 +434,9 @@ public sealed class DownloadBotService(
                 break;
             case "rename-folder":
                 await HandleRenameFolderAsync(command);
+                break;
+            case "delete":
+                await HandleDeleteAsync(command);
                 break;
         }
     }
@@ -705,6 +719,97 @@ public sealed class DownloadBotService(
         await command.RespondAsync(message, ephemeral: true);
     }
 
+    // Checked again on the select-menu click, not just on the command — the role is the only thing
+    // standing between a user and a permanent recursive delete.
+    private bool IsMod(IUser user) =>
+        options.Value.ModsRoleId is { } roleId && user is SocketGuildUser guildUser && guildUser.Roles.Any(r => r.Id == roleId);
+
+    private async Task HandleDeleteAsync(SocketSlashCommand command)
+    {
+        var search = ((string)command.Data.Options.First(o => o.Name == "search").Value).Trim();
+
+        logger.LogInformation("/delete invoked by {User}: search={Search}", command.User.Username, search);
+
+        if (!IsMod(command.User))
+        {
+            logger.LogWarning("/delete denied for {User}: missing Mods role", command.User.Username);
+            await command.RespondAsync("Only members with the Mods role can use `/delete`.", ephemeral: true);
+            return;
+        }
+
+        if (search.Length == 0)
+        {
+            await command.RespondAsync("Give me part of a folder name to search for.", ephemeral: true);
+            return;
+        }
+
+        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath))
+        {
+            await command.RespondAsync("No `youtube` save path configured for the active drive — check `QBittorrent:SavePaths`.", ephemeral: true);
+            return;
+        }
+
+        var matches = YoutubeFolderResolver.FindMatching(youtubePath, search);
+        if (matches.Count == 0)
+        {
+            await command.RespondAsync($"No folders matching `{search}` under the active drive's Youtube folder.", ephemeral: true);
+            return;
+        }
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId("delete-pick")
+            .WithPlaceholder("Choose a folder to DELETE");
+
+        foreach (var (name, index) in matches.Select((n, i) => (n, i)))
+            menu.AddOption(Truncate(name, 100), index.ToString());
+
+        await command.DeferAsync(ephemeral: true);
+        var message = await command.FollowupAsync(
+            "⚠️ Picking a folder **permanently deletes it and everything inside**. Which one?",
+            components: new ComponentBuilder().WithSelectMenu(menu).Build(), ephemeral: true);
+        _pendingDeletePicks[message.Id] = matches;
+    }
+
+    private async Task HandleDeletePickAsync(SocketMessageComponent component)
+    {
+        await component.DeferAsync();
+
+        if (!IsMod(component.User))
+        {
+            logger.LogWarning("/delete pick denied for {User}: missing Mods role", component.User.Username);
+            await component.ModifyOriginalResponseAsync(m => { m.Content = "Only members with the Mods role can use `/delete`."; m.Components = new ComponentBuilder().Build(); });
+            return;
+        }
+
+        if (!_pendingDeletePicks.TryRemove(component.Message.Id, out var names))
+        {
+            await component.ModifyOriginalResponseAsync(m => { m.Content = "This selection has expired."; m.Components = new ComponentBuilder().Build(); });
+            return;
+        }
+
+        var name = names[int.Parse(component.Data.Values.First())];
+
+        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath)
+            || YoutubeFolderResolver.ResolveExisting(youtubePath, name) is not { } folderPath)
+        {
+            await component.ModifyOriginalResponseAsync(m => { m.Content = $"`{name}` no longer exists."; m.Components = new ComponentBuilder().Build(); });
+            return;
+        }
+
+        try
+        {
+            Directory.Delete(folderPath, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to delete folder {Path}", folderPath);
+            await component.ModifyOriginalResponseAsync(m => { m.Content = $"Failed to delete `{name}`: {ex.Message}"; m.Components = new ComponentBuilder().Build(); });
+            return;
+        }
+
+        logger.LogWarning("User {User} deleted folder \"{Folder}\" ({Path}) and its contents", component.User.Username, name, folderPath);
+        await component.ModifyOriginalResponseAsync(m => { m.Content = $"🗑️ Deleted `{name}` and everything in it."; m.Components = new ComponentBuilder().Build(); });
+    }
 
     private static MessageComponent BuildDownloadYtCancelButton(Guid requestId) =>
         new ComponentBuilder().WithButton("Cancel", $"download-yt-cancel:{requestId}", ButtonStyle.Danger).Build();
@@ -764,15 +869,10 @@ public sealed class DownloadBotService(
 
     private IEnumerable<AutocompleteResult> GetYoutubeFolderAutocompleteMatches(string partial)
     {
-        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath) || !Directory.Exists(youtubePath))
+        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath))
             return [];
 
-        return Directory.GetDirectories(youtubePath)
-            .Select(Path.GetFileName)
-            .Where(name => !string.IsNullOrEmpty(name) && name.Contains(partial, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .Take(25)
-            .Select(name => new AutocompleteResult(name!, name!));
+        return YoutubeFolderResolver.FindMatching(youtubePath, partial).Select(name => new AutocompleteResult(name, name));
     }
 
     private IEnumerable<AutocompleteResult> GetDriveAutocompleteMatches(string partial) =>
@@ -1020,6 +1120,9 @@ public sealed class DownloadBotService(
                 "Renames a folder under the active drive's Youtube folder. Pick the folder (start " +
                 "typing to search) and type the new name — same character rules as above apply, so an " +
                 "invalid name just gets cleaned up automatically instead of failing.")
+            .AddField("/delete search",
+                "Mods only. Type part of a folder name under the active drive's Youtube folder, pick the " +
+                "match from the list, and it's **permanently deleted along with everything in it**.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
@@ -1347,6 +1450,7 @@ public sealed class DownloadBotService(
         "download-pick" => HandleDownloadPickAsync(component),
         "cancel-pick" => HandleCancelPickAsync(component),
         "switch-drive-pick" => HandleSwitchDrivePickAsync(component),
+        "delete-pick" => HandleDeletePickAsync(component),
         _ => Task.CompletedTask
     };
 

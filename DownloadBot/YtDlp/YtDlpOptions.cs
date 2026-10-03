@@ -18,8 +18,8 @@ public sealed class YtDlpOptions
     // Container yt-dlp remuxes/merges into via --merge-output-format.
     public string MergeOutputFormat { get; set; } = "mp4";
 
-    // Hard cap on one /download-yt invocation's wall-clock time (single video or whole
-    // playlist) — the process (and its ffmpeg child) is killed if exceeded.
+    // Inactivity limit, not a total-time cap: the process (and its ffmpeg child) is killed only if
+    // yt-dlp prints nothing for this long, so a big playlist that's making progress never times out.
     public int TimeoutMinutes { get; set; } = 30;
 
     // Passed as --max-downloads — caps a playlist URL at this many videos so an accidental
