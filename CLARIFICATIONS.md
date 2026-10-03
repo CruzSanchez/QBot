@@ -330,7 +330,7 @@ on the confirmation.
   category folder itself (e.g. all of `Movies`), never files, never anything
   deeper. A final shape check (`<drive>\plex\<category>\<item>`, not on C:)
   runs again right before the delete.
-- Every delete is logged at Warning with who did it and the full path.
+- Every delete (or failed attempt) is also announced publicly in the channel with who did it and the full path; the picker and confirm stay private to the mod. It is logged at Warning too.
   Deleting a folder that qBittorrent, yt-dlp, or Plex has open can fail; the
   error is shown instead of the folder being half-removed silently.
 - The torrent itself isn't touched: if the folder came from a download still

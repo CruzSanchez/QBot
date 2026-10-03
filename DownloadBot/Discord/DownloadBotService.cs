@@ -855,11 +855,15 @@ public sealed class DownloadBotService(
         {
             logger.LogError(ex, "Failed to delete folder {Path}", folder.Path);
             await component.ModifyOriginalResponseAsync(m => { m.Content = $"Failed to delete `{folder.Name}`: {ex.Message}"; m.Components = EmptyComponents; });
+            await component.FollowupAsync($"⚠️ **{component.User.Username}** tried to delete `{folder.Path}` but it failed: {ex.Message}");
             return;
         }
 
         logger.LogWarning("User {User} deleted folder {Path} and its contents", component.User.Username, folder.Path);
         await component.ModifyOriginalResponseAsync(m => { m.Content = $"🗑️ Deleted `{folder.Path}` and everything in it."; m.Components = EmptyComponents; });
+
+        // The picker/confirm stay private to the mod; the outcome is posted publicly as an audit trail.
+        await component.FollowupAsync($"🗑️ **{component.User.Username}** deleted `{folder.Path}` and everything in it.");
     }
 
     private static MessageComponent BuildDownloadYtCancelButton(Guid requestId) =>
