@@ -316,15 +316,22 @@ channel connect/disconnect notices already go to — no new config needed).
 
 ## /delete — Mods-only folder deletion (2026-10-03)
 
-`/delete search:<text>` lists folders under the active drive's Youtube folder
-whose name contains the text (case-insensitive, up to 25) in a picker; picking
-one **permanently deletes the folder and everything in it** — no extra confirm
-step, by request.
-- Restricted to the role in `Discord:ModsRoleId` (set to the Mods role,
-  `1551025784460681278`). Checked on the command *and* again on the pick. If
-  `ModsRoleId` is unset, nobody can use it.
-- Scoped to the Youtube folder only (same as `/rename-folder`) — it can't touch
-  Movies/TV/Music. Names are re-resolved through the same path-traversal guard
-  as `/rename-folder` before deleting.
-- Every delete is logged at Warning with who did it. Deleting a folder that
-  yt-dlp or Plex is actively using can fail; the error is shown instead.
+`/delete search:<text>` searches every Plex category folder on every drive
+(`<drive>\plex\<category>\<folder>`, all ready drives except C:, live — not the
+12h library cache) for folders whose name contains the text (case-insensitive,
+up to 25), shown in a picker with the drive and category beside each name.
+Picking one asks for a final "Delete forever" confirmation; that **permanently
+deletes the folder and everything in it**. A Cancel button is on the picker and
+on the confirmation.
+- Restricted to the role in `Discord:ModsRoleId` (the Mods role,
+  `1551025784460681278`), re-checked on the command, the pick, and the confirm.
+  If `ModsRoleId` is unset, nobody can use it.
+- Only ever matches folders exactly one level inside a category — never a
+  category folder itself (e.g. all of `Movies`), never files, never anything
+  deeper. A final shape check (`<drive>\plex\<category>\<item>`, not on C:)
+  runs again right before the delete.
+- Every delete is logged at Warning with who did it and the full path.
+  Deleting a folder that qBittorrent, yt-dlp, or Plex has open can fail; the
+  error is shown instead of the folder being half-removed silently.
+- The torrent itself isn't touched: if the folder came from a download still
+  listed in qBittorrent, remove that with `/cancel` too or it may recreate files.

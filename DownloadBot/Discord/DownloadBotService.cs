@@ -43,8 +43,9 @@ public sealed class DownloadBotService(
     // whoever added it), keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, IReadOnlyList<TorrentState>> _pendingCancelPicks = new();
 
-    // /delete's "which folder?" picker options (folder names under the Youtube folder), keyed by that message's id.
-    private readonly ConcurrentDictionary<ulong, IReadOnlyList<string>> _pendingDeletePicks = new();
+    // /delete's "which folder?" picker options and then the chosen folder awaiting confirmation, keyed by that message's id.
+    private readonly ConcurrentDictionary<ulong, IReadOnlyList<PlexFolder>> _pendingDeletePicks = new();
+    private readonly ConcurrentDictionary<ulong, PlexFolder> _pendingDeleteConfirmations = new();
 
     // /cancel's "remove, remove+delete, or nevermind?" confirmations, keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, TorrentState> _pendingCancelConfirmations = new();
@@ -333,7 +334,7 @@ public sealed class DownloadBotService(
 
         var deleteCommand = new SlashCommandBuilder()
             .WithName("delete")
-            .WithDescription("Mods only: delete a folder (and everything in it) from the Youtube folder")
+            .WithDescription("Mods only: find a Plex library folder on any drive and delete it with its contents")
             .AddOption("search", ApplicationCommandOptionType.String, "Part of the folder name to look for", isRequired: true)
             .Build();
 
@@ -719,10 +720,12 @@ public sealed class DownloadBotService(
         await command.RespondAsync(message, ephemeral: true);
     }
 
-    // Checked again on the select-menu click, not just on the command — the role is the only thing
-    // standing between a user and a permanent recursive delete.
+    // Re-checked on every step (command, pick, confirm), not just the first — the role is the only
+    // thing standing between a user and a permanent recursive delete.
     private bool IsMod(IUser user) =>
         options.Value.ModsRoleId is { } roleId && user is SocketGuildUser guildUser && guildUser.Roles.Any(r => r.Id == roleId);
+
+    private static readonly MessageComponent EmptyComponents = new ComponentBuilder().Build();
 
     private async Task HandleDeleteAsync(SocketSlashCommand command)
     {
@@ -743,72 +746,120 @@ public sealed class DownloadBotService(
             return;
         }
 
-        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath))
-        {
-            await command.RespondAsync("No `youtube` save path configured for the active drive — check `QBittorrent:SavePaths`.", ephemeral: true);
-            return;
-        }
+        await command.DeferAsync(ephemeral: true);
 
-        var matches = YoutubeFolderResolver.FindMatching(youtubePath, search);
+        var matches = PlexFolderFinder.FindMatching(PlexFolderFinder.GetPlexRoots(), search);
         if (matches.Count == 0)
         {
-            await command.RespondAsync($"No folders matching `{search}` under the active drive's Youtube folder.", ephemeral: true);
+            await command.FollowupAsync($"No folders matching `{search}` in any Plex category on any drive.", ephemeral: true);
             return;
         }
 
         var menu = new SelectMenuBuilder()
             .WithCustomId("delete-pick")
-            .WithPlaceholder("Choose a folder to DELETE");
+            .WithPlaceholder("Choose a folder to delete");
 
-        foreach (var (name, index) in matches.Select((n, i) => (n, i)))
-            menu.AddOption(Truncate(name, 100), index.ToString());
+        foreach (var (folder, index) in matches.Select((f, i) => (f, i)))
+            menu.AddOption(Truncate(folder.Name, 100), index.ToString(), Truncate($"{folder.Drive} • {folder.Category}", 100));
 
-        await command.DeferAsync(ephemeral: true);
+        var components = new ComponentBuilder()
+            .WithSelectMenu(menu)
+            .WithButton("Cancel", "delete-cancel", ButtonStyle.Secondary)
+            .Build();
+
         var message = await command.FollowupAsync(
-            "⚠️ Picking a folder **permanently deletes it and everything inside**. Which one?",
-            components: new ComponentBuilder().WithSelectMenu(menu).Build(), ephemeral: true);
+            $"Found {matches.Count} folder(s) matching `{search}`. Pick one to delete, or cancel.",
+            components: components, ephemeral: true);
         _pendingDeletePicks[message.Id] = matches;
     }
 
     private async Task HandleDeletePickAsync(SocketMessageComponent component)
     {
-        await component.DeferAsync();
-
         if (!IsMod(component.User))
         {
             logger.LogWarning("/delete pick denied for {User}: missing Mods role", component.User.Username);
-            await component.ModifyOriginalResponseAsync(m => { m.Content = "Only members with the Mods role can use `/delete`."; m.Components = new ComponentBuilder().Build(); });
+            await component.UpdateAsync(m => { m.Content = "Only members with the Mods role can use `/delete`."; m.Components = EmptyComponents; });
             return;
         }
 
-        if (!_pendingDeletePicks.TryRemove(component.Message.Id, out var names))
+        if (!_pendingDeletePicks.TryRemove(component.Message.Id, out var matches))
         {
-            await component.ModifyOriginalResponseAsync(m => { m.Content = "This selection has expired."; m.Components = new ComponentBuilder().Build(); });
+            await component.UpdateAsync(m => { m.Content = "This selection has expired."; m.Components = EmptyComponents; });
             return;
         }
 
-        var name = names[int.Parse(component.Data.Values.First())];
+        var folder = matches[int.Parse(component.Data.Values.First())];
+        _pendingDeleteConfirmations[component.Message.Id] = folder;
 
-        if (!activeDriveStore.TryGetSavePath("youtube", out var youtubePath)
-            || YoutubeFolderResolver.ResolveExisting(youtubePath, name) is not { } folderPath)
+        var buttons = new ComponentBuilder()
+            .WithButton("Delete forever", "delete-confirm-yes", ButtonStyle.Danger)
+            .WithButton("Cancel", "delete-confirm-no", ButtonStyle.Secondary)
+            .Build();
+
+        await component.UpdateAsync(m =>
         {
-            await component.ModifyOriginalResponseAsync(m => { m.Content = $"`{name}` no longer exists."; m.Components = new ComponentBuilder().Build(); });
+            m.Content = $"⚠️ Permanently delete `{folder.Path}` and everything inside it? This can't be undone.";
+            m.Components = buttons;
+        });
+    }
+
+    // Handles every Cancel at any stage (picker or confirmation) and the final "Delete forever".
+    private async Task HandleDeleteButtonAsync(SocketMessageComponent component)
+    {
+        var customId = component.Data.CustomId;
+        var messageId = component.Message.Id;
+
+        if (customId is "delete-cancel" or "delete-confirm-no")
+        {
+            _pendingDeletePicks.TryRemove(messageId, out _);
+            _pendingDeleteConfirmations.TryRemove(messageId, out _);
+            logger.LogInformation("User {User} cancelled /delete", component.User.Username);
+            await component.UpdateAsync(m => { m.Content = "Cancelled — nothing was deleted."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        if (!IsMod(component.User))
+        {
+            logger.LogWarning("/delete confirm denied for {User}: missing Mods role", component.User.Username);
+            await component.UpdateAsync(m => { m.Content = "Only members with the Mods role can use `/delete`."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        if (!_pendingDeleteConfirmations.TryRemove(messageId, out var folder))
+        {
+            await component.UpdateAsync(m => { m.Content = "This confirmation has expired."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        // Deleting a big folder can outlast Discord's 3-second ack window.
+        await component.DeferAsync();
+
+        if (!PlexFolderFinder.IsLibraryItemFolder(folder.Path))
+        {
+            logger.LogError("Refusing to delete {Path}: not a <drive>\\plex\\<category>\\<item> folder", folder.Path);
+            await component.ModifyOriginalResponseAsync(m => { m.Content = "Refused: that path isn't a library item folder."; m.Components = EmptyComponents; });
             return;
         }
 
         try
         {
-            Directory.Delete(folderPath, recursive: true);
+            if (!Directory.Exists(folder.Path))
+            {
+                await component.ModifyOriginalResponseAsync(m => { m.Content = $"`{folder.Path}` no longer exists."; m.Components = EmptyComponents; });
+                return;
+            }
+
+            Directory.Delete(folder.Path, recursive: true);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to delete folder {Path}", folderPath);
-            await component.ModifyOriginalResponseAsync(m => { m.Content = $"Failed to delete `{name}`: {ex.Message}"; m.Components = new ComponentBuilder().Build(); });
+            logger.LogError(ex, "Failed to delete folder {Path}", folder.Path);
+            await component.ModifyOriginalResponseAsync(m => { m.Content = $"Failed to delete `{folder.Name}`: {ex.Message}"; m.Components = EmptyComponents; });
             return;
         }
 
-        logger.LogWarning("User {User} deleted folder \"{Folder}\" ({Path}) and its contents", component.User.Username, name, folderPath);
-        await component.ModifyOriginalResponseAsync(m => { m.Content = $"🗑️ Deleted `{name}` and everything in it."; m.Components = new ComponentBuilder().Build(); });
+        logger.LogWarning("User {User} deleted folder {Path} and its contents", component.User.Username, folder.Path);
+        await component.ModifyOriginalResponseAsync(m => { m.Content = $"🗑️ Deleted `{folder.Path}` and everything in it."; m.Components = EmptyComponents; });
     }
 
     private static MessageComponent BuildDownloadYtCancelButton(Guid requestId) =>
@@ -1121,8 +1172,9 @@ public sealed class DownloadBotService(
                 "typing to search) and type the new name — same character rules as above apply, so an " +
                 "invalid name just gets cleaned up automatically instead of failing.")
             .AddField("/delete search",
-                "Mods only. Type part of a folder name under the active drive's Youtube folder, pick the " +
-                "match from the list, and it's **permanently deleted along with everything in it**.")
+                "Mods only. Type part of a folder name; every Plex category folder on every drive is " +
+                "searched. Pick a match, confirm, and it's **permanently deleted with everything in it**. " +
+                "Cancel is available at every step.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
@@ -1235,6 +1287,7 @@ public sealed class DownloadBotService(
             "space-confirm-yes" or "space-confirm-no" => HandleSpaceConfirmAsync(component),
             "cancel-confirm-remove" or "cancel-confirm-remove-delete" or "cancel-confirm-no" => HandleCancelConfirmAsync(component),
             "switch-drive-cancel" => HandleSwitchDriveCancelAsync(component),
+            "delete-cancel" or "delete-confirm-no" or "delete-confirm-yes" => HandleDeleteButtonAsync(component),
             _ => Task.CompletedTask
         };
     }
