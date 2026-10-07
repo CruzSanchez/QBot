@@ -47,6 +47,13 @@ public sealed class DownloadBotService(
     private readonly ConcurrentDictionary<ulong, IReadOnlyList<PlexFolder>> _pendingDeletePicks = new();
     private readonly ConcurrentDictionary<ulong, PlexFolder> _pendingDeleteConfirmations = new();
 
+    // /move's three stages, each keyed by that message's id: folder picker -> destination picker -> confirm.
+    private sealed record PendingMoveDestinations(PlexFolder Source, IReadOnlyList<PlexCategory> Destinations);
+    private sealed record PendingMoveConfirmation(PlexFolder Source, string DestinationPath);
+    private readonly ConcurrentDictionary<ulong, IReadOnlyList<PlexFolder>> _pendingMovePicks = new();
+    private readonly ConcurrentDictionary<ulong, PendingMoveDestinations> _pendingMoveDestinations = new();
+    private readonly ConcurrentDictionary<ulong, PendingMoveConfirmation> _pendingMoveConfirmations = new();
+
     // /cancel's "remove, remove+delete, or nevermind?" confirmations, keyed by that message's id.
     private readonly ConcurrentDictionary<ulong, TorrentState> _pendingCancelConfirmations = new();
 
@@ -338,6 +345,12 @@ public sealed class DownloadBotService(
             .AddOption("search", ApplicationCommandOptionType.String, "Part of the folder name to look for", isRequired: true)
             .Build();
 
+        var moveCommand = new SlashCommandBuilder()
+            .WithName("move")
+            .WithDescription("Mods only: move a Plex library folder to another category or drive")
+            .AddOption("search", ApplicationCommandOptionType.String, "Part of the folder name to look for", isRequired: true)
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -353,6 +366,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(downloadYtCommand, guildId);
                 await client.Rest.CreateGuildCommand(renameFolderCommand, guildId);
                 await client.Rest.CreateGuildCommand(deleteCommand, guildId);
+                await client.Rest.CreateGuildCommand(moveCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -368,6 +382,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(downloadYtCommand);
                 await client.Rest.CreateGlobalCommand(renameFolderCommand);
                 await client.Rest.CreateGlobalCommand(deleteCommand);
+                await client.Rest.CreateGlobalCommand(moveCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -438,6 +453,9 @@ public sealed class DownloadBotService(
                 break;
             case "delete":
                 await HandleDeleteAsync(command);
+                break;
+            case "move":
+                await HandleMoveAsync(command);
                 break;
         }
     }
@@ -866,6 +884,220 @@ public sealed class DownloadBotService(
         await component.FollowupAsync($"🗑️ **{component.User.Username}** deleted `{folder.Path}` and everything in it.");
     }
 
+    private async Task HandleMoveAsync(SocketSlashCommand command)
+    {
+        var search = ((string)command.Data.Options.First(o => o.Name == "search").Value).Trim();
+
+        logger.LogInformation("/move invoked by {User}: search={Search}", command.User.Username, search);
+
+        if (!IsMod(command.User))
+        {
+            logger.LogWarning("/move denied for {User}: missing Mods role", command.User.Username);
+            await command.RespondAsync("Only members with the Mods role can use `/move`.", ephemeral: true);
+            return;
+        }
+
+        if (search.Length == 0)
+        {
+            await command.RespondAsync("Give me part of a folder name to search for.", ephemeral: true);
+            return;
+        }
+
+        await command.DeferAsync(ephemeral: true);
+
+        var matches = PlexFolderFinder.FindMatching(PlexFolderFinder.GetPlexRoots(), search);
+        if (matches.Count == 0)
+        {
+            await command.FollowupAsync($"No folders matching `{search}` in any Plex category on any drive.", ephemeral: true);
+            return;
+        }
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId("move-pick")
+            .WithPlaceholder("Choose a folder to move");
+
+        foreach (var (folder, index) in matches.Select((f, i) => (f, i)))
+            menu.AddOption(Truncate(folder.Name, 100), index.ToString(), Truncate($"{folder.Drive} • {folder.Category}", 100));
+
+        var message = await command.FollowupAsync(
+            $"Found {matches.Count} folder(s) matching `{search}`. Pick one to move, or cancel.",
+            components: new ComponentBuilder().WithSelectMenu(menu).WithButton("Cancel", "move-cancel", ButtonStyle.Secondary).Build(),
+            ephemeral: true);
+        _pendingMovePicks[message.Id] = matches;
+    }
+
+    private async Task HandleMovePickAsync(SocketMessageComponent component)
+    {
+        if (!IsMod(component.User))
+        {
+            await component.UpdateAsync(m => { m.Content = "Only members with the Mods role can use `/move`."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        if (!_pendingMovePicks.TryRemove(component.Message.Id, out var matches))
+        {
+            await component.UpdateAsync(m => { m.Content = "This selection has expired."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        var source = matches[int.Parse(component.Data.Values.First())];
+        var destinations = PlexFolderFinder
+            .ValidDestinations(PlexFolderFinder.GetCategories(PlexFolderFinder.GetPlexRoots()), source)
+            .Take(25) // Discord select menus cap at 25 options
+            .ToList();
+
+        if (destinations.Count == 0)
+        {
+            await component.UpdateAsync(m =>
+            {
+                m.Content = $"Nowhere to move `{source.Name}`: every other category already has a folder with that name.";
+                m.Components = EmptyComponents;
+            });
+            return;
+        }
+
+        var menu = new SelectMenuBuilder()
+            .WithCustomId("move-dest-pick")
+            .WithPlaceholder("Choose where to move it");
+
+        foreach (var (category, index) in destinations.Select((c, i) => (c, i)))
+            menu.AddOption($"{category.Drive} • {category.Category}", index.ToString());
+
+        _pendingMoveDestinations[component.Message.Id] = new PendingMoveDestinations(source, destinations);
+
+        var components = new ComponentBuilder().WithSelectMenu(menu).WithButton("Cancel", "move-cancel", ButtonStyle.Secondary).Build();
+        await component.UpdateAsync(m =>
+        {
+            m.Content = $"Move `{source.Path}` where?";
+            m.Components = components;
+        });
+    }
+
+    private async Task HandleMoveDestinationPickAsync(SocketMessageComponent component)
+    {
+        if (!IsMod(component.User))
+        {
+            await component.UpdateAsync(m => { m.Content = "Only members with the Mods role can use `/move`."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        if (!_pendingMoveDestinations.TryRemove(component.Message.Id, out var pending))
+        {
+            await component.UpdateAsync(m => { m.Content = "This selection has expired."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        var destination = pending.Destinations[int.Parse(component.Data.Values.First())];
+        var destinationPath = Path.Combine(destination.Path, pending.Source.Name);
+        _pendingMoveConfirmations[component.Message.Id] = new PendingMoveConfirmation(pending.Source, destinationPath);
+
+        var crossDrive = !string.Equals(Path.GetPathRoot(pending.Source.Path), Path.GetPathRoot(destinationPath), StringComparison.OrdinalIgnoreCase);
+        var buttons = new ComponentBuilder()
+            .WithButton("Move", "move-confirm-yes", ButtonStyle.Danger)
+            .WithButton("Cancel", "move-confirm-no", ButtonStyle.Secondary)
+            .Build();
+
+        await component.UpdateAsync(m =>
+        {
+            m.Content = $"Move `{pending.Source.Path}`\n→ `{destinationPath}`?" +
+                (crossDrive ? "\nThat's a different drive, so it copies then removes the original — large folders can take a while." : "");
+            m.Components = buttons;
+        });
+    }
+
+    // Handles every Cancel at any stage (folder picker, destination picker, confirmation) and the final "Move".
+    private async Task HandleMoveButtonAsync(SocketMessageComponent component)
+    {
+        var customId = component.Data.CustomId;
+        var messageId = component.Message.Id;
+
+        if (customId is "move-cancel" or "move-confirm-no")
+        {
+            _pendingMovePicks.TryRemove(messageId, out _);
+            _pendingMoveDestinations.TryRemove(messageId, out _);
+            _pendingMoveConfirmations.TryRemove(messageId, out _);
+            logger.LogInformation("User {User} cancelled /move", component.User.Username);
+            await component.UpdateAsync(m => { m.Content = "Cancelled — nothing was moved."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        if (!IsMod(component.User))
+        {
+            logger.LogWarning("/move confirm denied for {User}: missing Mods role", component.User.Username);
+            await component.UpdateAsync(m => { m.Content = "Only members with the Mods role can use `/move`."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        if (!_pendingMoveConfirmations.TryRemove(messageId, out var move))
+        {
+            await component.UpdateAsync(m => { m.Content = "This confirmation has expired."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        // A cross-drive move can take far longer than Discord's 3-second ack window.
+        await component.DeferAsync();
+
+        var source = move.Source.Path;
+        var destination = move.DestinationPath;
+
+        if (!PlexFolderFinder.IsLibraryItemFolder(source) || !PlexFolderFinder.IsCategoryFolder(Path.GetDirectoryName(destination)!))
+        {
+            logger.LogError("Refusing to move {Source} -> {Destination}: not <drive>\\plex\\<category> shaped", source, destination);
+            await TryEditAsync(component, "Refused: that path isn't a library item folder or category.");
+            return;
+        }
+
+        if (!Directory.Exists(source))
+        {
+            await TryEditAsync(component, $"`{source}` no longer exists.");
+            return;
+        }
+
+        await TryEditAsync(component, $"Moving `{source}` → `{destination}` …");
+
+        var (ok, error) = await PlexFolderMover.MoveAsync(source, destination);
+
+        if (!ok)
+        {
+            logger.LogError("Failed to move {Source} -> {Destination}: {Error}", source, destination, error);
+            await TryEditAsync(component, $"Failed to move `{move.Source.Name}`: {error}");
+            await AnnouncePubliclyAsync(component, $"⚠️ **{component.User.Username}** tried to move `{source}` → `{destination}` but it failed: {error}");
+            return;
+        }
+
+        logger.LogWarning("User {User} moved {Source} -> {Destination}", component.User.Username, source, destination);
+        await TryEditAsync(component, $"📦 Moved `{source}` → `{destination}`.");
+        await AnnouncePubliclyAsync(component, $"📦 **{component.User.Username}** moved `{source}` → `{destination}`.");
+    }
+
+    // The ephemeral original can only be edited for 15 minutes after the interaction, which a very
+    // large cross-drive move can outlast — losing that edit shouldn't lose the public notice.
+    private async Task TryEditAsync(SocketMessageComponent component, string content)
+    {
+        try
+        {
+            await component.ModifyOriginalResponseAsync(m => { m.Content = content; m.Components = EmptyComponents; });
+        }
+        catch (global::Discord.Net.HttpException ex)
+        {
+            logger.LogWarning(ex, "Could not edit the private /move message (interaction token likely expired)");
+        }
+    }
+
+    private async Task AnnouncePubliclyAsync(SocketMessageComponent component, string text)
+    {
+        try
+        {
+            await component.FollowupAsync(text);
+        }
+        catch (global::Discord.Net.HttpException ex)
+        {
+            logger.LogWarning(ex, "Followup failed (interaction token likely expired); posting to the channel instead");
+            if (component.Channel is not null)
+                await component.Channel.SendMessageAsync(text);
+        }
+    }
+
     private static MessageComponent BuildDownloadYtCancelButton(Guid requestId) =>
         new ComponentBuilder().WithButton("Cancel", $"download-yt-cancel:{requestId}", ButtonStyle.Danger).Build();
 
@@ -1128,9 +1360,13 @@ public sealed class DownloadBotService(
         return command.RespondAsync(embed: embed);
     }
 
-    private static Task HandleHelpAsync(SocketSlashCommand command)
-    {
-        var embed = new EmbedBuilder()
+    private static Task HandleHelpAsync(SocketSlashCommand command) =>
+        command.RespondAsync(embed: BuildHelpEmbed(), ephemeral: true);
+
+    // Public so a unit test can assert it stays within Discord's embed limits (1024 per field, 6000
+    // total) — exceeding either makes Build() throw and silently breaks /qbot-help.
+    public static Embed BuildHelpEmbed() =>
+        new EmbedBuilder()
             .WithTitle("Download bot — how to use it")
             .WithDescription("Search torrent indexers from Discord and queue a download for qBittorrent to pick up automatically.")
             .AddField("/download title type",
@@ -1179,6 +1415,10 @@ public sealed class DownloadBotService(
                 "Mods only. Type part of a folder name; every Plex category folder on every drive is " +
                 "searched. Pick a match, confirm, and it's **permanently deleted with everything in it**. " +
                 "Cancel is available at every step.")
+            .AddField("/move search",
+                "Mods only. Search works like `/delete`; then pick the destination category/drive, confirm, " +
+                "and the folder is moved (never overwriting an existing one). Cancel at any step; the " +
+                "result is announced publicly.")
             .AddField("What happens after you pick",
                 "The chosen release is added directly to qBittorrent — you'll know within a few seconds " +
                 "whether it worked. If the destination drive doesn't have enough free space, you'll be " +
@@ -1187,9 +1427,6 @@ public sealed class DownloadBotService(
                 "\"Cancel this download\" button so you can act on them right away.")
             .WithFooter("Ask whoever runs the bot if a search comes back empty — it may need more indexers configured.")
             .Build();
-
-        return command.RespondAsync(embed: embed, ephemeral: true);
-    }
 
     private async Task HandleDownloadAsync(SocketSlashCommand command)
     {
@@ -1292,6 +1529,7 @@ public sealed class DownloadBotService(
             "cancel-confirm-remove" or "cancel-confirm-remove-delete" or "cancel-confirm-no" => HandleCancelConfirmAsync(component),
             "switch-drive-cancel" => HandleSwitchDriveCancelAsync(component),
             "delete-cancel" or "delete-confirm-no" or "delete-confirm-yes" => HandleDeleteButtonAsync(component),
+            "move-cancel" or "move-confirm-no" or "move-confirm-yes" => HandleMoveButtonAsync(component),
             _ => Task.CompletedTask
         };
     }
@@ -1508,6 +1746,8 @@ public sealed class DownloadBotService(
         "cancel-pick" => HandleCancelPickAsync(component),
         "switch-drive-pick" => HandleSwitchDrivePickAsync(component),
         "delete-pick" => HandleDeletePickAsync(component),
+        "move-pick" => HandleMovePickAsync(component),
+        "move-dest-pick" => HandleMoveDestinationPickAsync(component),
         _ => Task.CompletedTask
     };
 

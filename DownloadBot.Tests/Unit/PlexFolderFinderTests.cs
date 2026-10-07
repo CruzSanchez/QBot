@@ -75,4 +75,66 @@ public class PlexFolderFinderTests : IDisposable
     {
         Assert.Equal(expected, PlexFolderFinder.IsLibraryItemFolder(path));
     }
+
+    [Theory]
+    [InlineData(@"G:\plex\Movies", true)]
+    [InlineData(@"E:\plex\Kids Movies", true)]
+    [InlineData(@"G:\plex", false)]
+    [InlineData(@"G:\plex\Movies\Hacksaw", false)]
+    [InlineData(@"C:\plex\Movies", false)]
+    [InlineData(@"G:\other\Movies", false)]
+    public void IsCategoryFolder_OnlyAcceptsDriveRootPlexCategory(string path, bool expected)
+    {
+        Assert.Equal(expected, PlexFolderFinder.IsCategoryFolder(path));
+    }
+
+    [Fact]
+    public void ValidDestinations_ExcludesOwnCategoryAndNameConflicts()
+    {
+        Directory.CreateDirectory(Path.Combine(_plex, "Other", "Daredevil")); // conflict in Other
+        var source = PlexFolderFinder.FindMatching([_plex], "Daredevil").Single(f => f.Category == "TV Shows");
+
+        var destinations = PlexFolderFinder.ValidDestinations(PlexFolderFinder.GetCategories([_plex]), source);
+
+        Assert.Equal(["Kids Movies", "Movies"], destinations.Select(c => c.Category));
+    }
+
+    [Fact]
+    public async Task MoveAsync_RenamesWithinTheSameVolume()
+    {
+        var source = Path.Combine(_plex, "TV Shows", "Daredevil");
+        File.WriteAllText(Path.Combine(source, "e01.mkv"), "x");
+        var destination = Path.Combine(_plex, "Movies", "Daredevil");
+
+        var (ok, error) = await PlexFolderMover.MoveAsync(source, destination);
+
+        Assert.True(ok, error);
+        Assert.False(Directory.Exists(source));
+        Assert.True(File.Exists(Path.Combine(destination, "e01.mkv")));
+    }
+
+    [Fact]
+    public async Task MoveAsync_RefusesToOverwriteAnExistingFolder()
+    {
+        var (ok, _) = await PlexFolderMover.MoveAsync(
+            Path.Combine(_plex, "TV Shows", "Daredevil"), Path.Combine(_plex, "Movies", "Hacksaw Ridge (2016)"));
+
+        Assert.False(ok);
+        Assert.True(Directory.Exists(Path.Combine(_plex, "TV Shows", "Daredevil")));
+    }
+
+    [Fact]
+    public async Task MoveWithRobocopyAsync_MovesNestedFilesAndRemovesTheSource()
+    {
+        var source = Path.Combine(_plex, "TV Shows", "Daredevil");
+        Directory.CreateDirectory(Path.Combine(source, "Season 1"));
+        File.WriteAllText(Path.Combine(source, "Season 1", "e01.mkv"), "x");
+        var destination = Path.Combine(_plex, "Movies", "Daredevil");
+
+        var (ok, error) = await PlexFolderMover.MoveWithRobocopyAsync(source, destination);
+
+        Assert.True(ok, error);
+        Assert.False(Directory.Exists(source));
+        Assert.True(File.Exists(Path.Combine(destination, "Season 1", "e01.mkv")));
+    }
 }

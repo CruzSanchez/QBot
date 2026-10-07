@@ -2,6 +2,8 @@ namespace DownloadBot.LocalLibrary;
 
 public sealed record PlexFolder(string Path, string Name, string Drive, string Category);
 
+public sealed record PlexCategory(string Path, string Drive, string Category);
+
 // Live (uncached) lookup of library item folders for /delete: the direct children of every
 // <drive>\plex\<category> folder. Never yields a category folder itself or anything shallower or
 // deeper, so a delete can only ever remove a single library item's folder.
@@ -33,6 +35,37 @@ public static class PlexFolderFinder
             .ThenBy(f => f.Path, StringComparer.OrdinalIgnoreCase)
             .Take(max)
             .ToList();
+    }
+
+    // Every <drive>\plex\<category> folder — the places /move can put a library folder.
+    public static IReadOnlyList<PlexCategory> GetCategories(IEnumerable<string> plexRoots) =>
+        plexRoots
+            .SelectMany(root => SafeDirectories(root))
+            .Select(dir => new PlexCategory(dir, Path.GetPathRoot(dir)!.TrimEnd('\\'), Path.GetFileName(dir)))
+            .OrderBy(c => c.Drive, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.Category, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    // Where source could be moved: any category other than the one it's already in, and only where no
+    // folder of that name exists yet (a move never merges into or overwrites an existing folder).
+    public static IReadOnlyList<PlexCategory> ValidDestinations(IEnumerable<PlexCategory> categories, PlexFolder source) =>
+        categories
+            .Where(c => !string.Equals(c.Path, Path.GetDirectoryName(source.Path), StringComparison.OrdinalIgnoreCase))
+            .Where(c => !Directory.Exists(Path.Combine(c.Path, source.Name)))
+            .ToList();
+
+    // True only for exactly <drive>\plex\<category>, never on C:.
+    public static bool IsCategoryFolder(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full);
+        var plex = Path.GetDirectoryName(full);
+
+        return root is not null
+            && !root.TrimEnd('\\').Equals("C:", StringComparison.OrdinalIgnoreCase)
+            && plex is not null
+            && Path.GetFileName(plex).Equals("plex", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetDirectoryName(plex), root, StringComparison.OrdinalIgnoreCase);
     }
 
     // Release-style folder names ("My.Name.Is.Earl.S01", "Mars_Attacks-1996") rarely match what a person

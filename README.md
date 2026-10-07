@@ -52,7 +52,7 @@ parallel. Folder names only ever get letters, digits, spaces, `-`, or `_` —
 anything else is cleaned up automatically instead of erroring. `/rename-folder`
 renames an existing folder under the active drive's Youtube folder (autocompletes
 the folder to pick). `/delete search` (Mods role only, `Discord:ModsRoleId`) searches every Plex folder on every drive,
-lists matches, and permanently deletes the one you pick after a confirm. A private/deleted/restricted video partway through a
+lists matches, and permanently deletes the one you pick after a confirm; `/move search` (same role) moves a matched folder to another category/drive. A private/deleted/restricted video partway through a
 playlist is skipped rather than failing the whole thing. A playlist is capped
 at `YtDlp:MaxDownloadsPerInvocation` (default 100) per run — `maxdownloads`
 overrides that for one download; re-running the same URL later skips what's

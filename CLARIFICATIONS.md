@@ -335,3 +335,25 @@ on the confirmation.
   error is shown instead of the folder being half-removed silently.
 - The torrent itself isn't touched: if the folder came from a download still
   listed in qBittorrent, remove that with `/cancel` too or it may recreate files.
+
+## /move — Mods-only folder moves (2026-10-06)
+
+`/move search:<text>` works like `/delete` (same Mods role check, same live,
+punctuation-tolerant search across every `<drive>\plex\<category>\<folder>`),
+with one extra step: after picking the folder you pick its **destination** —
+any other `<drive>\plex\<category>` — then confirm with "Move". Cancel is
+available on every step; the private picker/confirm stay with the mod and the
+result (or failure) is announced publicly with who did it and both paths.
+- Destinations never include the folder's current category, nor any category
+  that already has a folder with the same name — a move never merges into or
+  overwrites something. (If every other category has a clash, it says so.)
+- Same drive = an instant rename. Different drive = `robocopy /MOVE` (built
+  into Windows), which can take a long time for a big folder. The private
+  message may stop updating after Discord's 15-minute interaction window, but
+  the public notice still posts (falls back to a plain channel message).
+- If a cross-drive move fails partway, files already copied are already gone
+  from the source (that's how `/MOVE` works), so check both locations.
+- Same safety rails as `/delete`: only exactly `<drive>\plex\<category>\<item>`
+  can be moved, only into exactly `<drive>\plex\<category>`, never on C:.
+- Like `/delete`, it doesn't touch qBittorrent — moving a folder that's still
+  an active torrent will make qBittorrent report missing files.
