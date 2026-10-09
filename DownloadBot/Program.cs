@@ -60,6 +60,7 @@ try
     builder.Services.AddHostedService<CompletionPollerService>();
     builder.Services.AddHostedService<DashboardService>();
     builder.Services.AddHostedService<ErrorLogUploadService>();
+    builder.Services.AddHostedService<DriveCheckScheduleService>();
 
     var app = builder.Build();
 

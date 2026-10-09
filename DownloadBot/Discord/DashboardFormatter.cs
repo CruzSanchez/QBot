@@ -1,4 +1,5 @@
 using global::Discord;
+using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
 
 namespace DownloadBot.Discord;
@@ -30,6 +31,19 @@ public static class DashboardFormatter
 
         if (nextRefreshAt is { } next)
             builder.AddField("Next update", $"<t:{next.ToUnixTimeSeconds()}:R>");
+
+        return builder.Build();
+    }
+
+    // Shared by /drive-check and the scheduled drive-space report so the two always look the same.
+    public static Embed BuildDriveSpaceEmbed(IReadOnlyList<DriveSpace> drives, DateTimeOffset? checkedAt = null)
+    {
+        var builder = new EmbedBuilder()
+            .WithTitle("Drive space")
+            .WithDescription(string.Join('\n', drives.Select(d => $"**{d.Name}** — {d.FreeGb:F2} GB free of {d.TotalGb:F2} GB")));
+
+        if (checkedAt is { } at)
+            builder.WithFooter($"Checked {CentralTime.Format(at)}");
 
         return builder.Build();
     }

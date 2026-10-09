@@ -14,6 +14,10 @@ public sealed class DiscordOptions
     // Leave unset to disable it (DashboardService just no-ops).
     public ulong? DashboardChannelId { get; set; }
 
+    // Optional: channel that gets the scheduled drive-space report (8am, 12pm, 10pm Central).
+    // Leave unset to disable it (DriveCheckScheduleService just no-ops).
+    public ulong? DriveCheckChannelId { get; set; }
+
     // Role allowed to use /delete (permanently removes a folder and its contents). Unset = nobody can.
     public ulong? ModsRoleId { get; set; }
 }

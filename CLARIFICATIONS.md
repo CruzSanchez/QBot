@@ -357,3 +357,16 @@ result (or failure) is announced publicly with who did it and both paths.
   can be moved, only into exactly `<drive>\plex\<category>`, never on C:.
 - Like `/delete`, it doesn't touch qBittorrent — moving a folder that's still
   an active torrent will make qBittorrent report missing files.
+
+## Scheduled drive-space report (2026-10-09)
+
+At **8:00 AM, 12:00 PM and 10:00 PM Central** the bot posts the same embed
+`/drive-check` shows (all drives except C:, with a "Checked …" footer) to
+`Discord:DriveCheckChannelId` (set to `1547823750517489696`). Leave it unset
+to turn the report off.
+- Times are Central wall-clock, so they follow daylight saving (the same
+  "CST" label the bot's other timestamps use) rather than a fixed UTC-6.
+- If the bot is down or disconnected at a slot, that report is just skipped —
+  it doesn't catch up later. A failed post logs a Warning, not an Error, so it
+  doesn't trigger the error-log upload.
+- The next run time is logged at startup and after each post.

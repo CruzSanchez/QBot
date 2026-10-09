@@ -2,7 +2,7 @@ namespace DownloadBot.Discord;
 
 public static class CentralTime
 {
-    private static readonly TimeZoneInfo Zone = Resolve();
+    public static readonly TimeZoneInfo Zone = Resolve();
 
     private static TimeZoneInfo Resolve()
     {

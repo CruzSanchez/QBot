@@ -1352,12 +1352,7 @@ public sealed class DownloadBotService(
         logger.LogInformation("/drive-check invoked by {User}: drive={Drive} -> {Count} result(s)",
             command.User.Username, driveOption ?? "(all)", results.Count);
 
-        var embed = new EmbedBuilder()
-            .WithTitle("Drive space")
-            .WithDescription(string.Join('\n', results.Select(d => $"**{d.Name}** — {d.FreeGb:F2} GB free of {d.TotalGb:F2} GB")))
-            .Build();
-
-        return command.RespondAsync(embed: embed);
+        return command.RespondAsync(embed: DashboardFormatter.BuildDriveSpaceEmbed(results));
     }
 
     private static Task HandleHelpAsync(SocketSlashCommand command) =>
