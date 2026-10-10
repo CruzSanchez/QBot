@@ -90,8 +90,11 @@ For day-to-day use (or if whoever's running the server isn't a developer):
   isn't a portable/standalone build, just a launcher.
 - **`install-startup-task.bat`** — one-time setup (ideally "Run as administrator")
   that registers a Windows Scheduled Task to run `run-bot.bat` automatically at
-  login, so the bot comes back up on its own after a restart. Modifies Task
-  Scheduler, so run it yourself rather than expecting it to happen silently.
+  login, so the bot comes back up on its own after a restart. The task also
+  **restarts itself if the bot crashes** (non-zero exit, retried every minute) and
+  has no run-time limit. Safe to re-run to update an existing task. It's a thin
+  wrapper over `install-startup-task.ps1`. Modifies Task Scheduler, so run it
+  yourself rather than expecting it to happen silently.
 - **`uninstall-startup-task.bat`** — removes that scheduled task.
 
 ## Auto-deploy on push

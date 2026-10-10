@@ -387,3 +387,28 @@ restarts it; the scheduled drive reports and everything else stopped too).
 - Still not covered: if the bot process dies for some other reason, nothing
   relaunches it until the next deploy or manual start. Say so if you want the
   startup scheduled task set to restart on failure.
+
+## Restart-on-crash scheduled task (2026-10-10)
+
+- [ ] **Re-run `install-startup-task.bat` on the server** (as Administrator; it
+      asks for your Windows password, same as before). It replaces the existing
+      `DownloadBot` task with one that:
+      - **restarts the bot 1 minute after a crash** (any non-zero exit code, up
+        to 999 times). A clean stop — Ctrl+C or the deploy's `POST /shutdown`,
+        both exit code 0 — is *not* restarted, so deploys still work normally.
+      - has **no run-time limit**. `schtasks /create` defaults to "stop the task
+        after 3 days", which would have been killing the bot every 72 hours with
+        no restart; this removes that.
+      - runs `run-bot.bat unattended`, which skips the final `pause` (it would
+        hang a task nobody's watching) and passes the bot's real exit code back
+        to Task Scheduler so it can tell a crash from a clean stop.
+- [ ] **Test it once** after installing: `schtasks /run /tn DownloadBot`, then end
+      the `DownloadBot` process in Task Manager — it should come back within
+      about a minute (check Task Scheduler -> DownloadBot -> History, or the
+      Discord "bot started" notice). If it doesn't, the restart-on-failure
+      setting isn't firing on that Windows build; tell me and I'll switch to a
+      restart loop inside `run-bot.bat` instead.
+- Caveat: if the deploy workflow ever has to force-kill a stuck bot, that
+  non-zero exit also triggers a restart a minute later. That's harmless in
+  practice (the restart runs the freshly built version), just don't be
+  surprised by it.
