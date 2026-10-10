@@ -14,11 +14,14 @@ public class DriveCheckScheduleTests
     [Theory]
     [InlineData("2026-10-09 07:59:00", "2026-10-09 08:00:00")]
     [InlineData("2026-10-09 08:00:00", "2026-10-09 12:00:00")] // exactly on a run time -> the next one, never itself
-    [InlineData("2026-10-09 12:30:00", "2026-10-09 22:00:00")]
+    [InlineData("2026-10-09 12:30:00", "2026-10-09 16:00:00")]
+    [InlineData("2026-10-09 15:59:00", "2026-10-09 16:00:00")]
+    [InlineData("2026-10-09 16:00:00", "2026-10-09 22:00:00")] // exactly on 4 PM -> the next slot
+    [InlineData("2026-10-09 17:00:00", "2026-10-09 22:00:00")]
     [InlineData("2026-10-09 22:00:00", "2026-10-10 08:00:00")]
     [InlineData("2026-10-09 23:30:00", "2026-10-10 08:00:00")]
     [InlineData("2026-10-09 00:05:00", "2026-10-09 08:00:00")]
-    public void NextRunUtc_PicksTheNextEightTwelveOrTenPmCentral(string nowLocal, string expectedLocal)
+    public void NextRunUtc_PicksTheNextEightTwelveFourOrTenPmCentral(string nowLocal, string expectedLocal)
     {
         var next = DriveCheckSchedule.NextRunUtc(Utc(DateTime.Parse(nowLocal)), Zone);
 

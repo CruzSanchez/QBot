@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 
 namespace DownloadBot.Discord;
 
-// Posts the same drive-space report /drive-check shows to Discord:DriveCheckChannelId at 8 AM, 12 PM
+// Posts the same drive-space report /drive-check shows to Discord:DriveCheckChannelId at 8 AM, 12 PM, 4 PM
 // and 10 PM Central, so free space is visible without anyone having to ask.
 public sealed class DriveCheckScheduleService(
     DiscordSocketClient discord,

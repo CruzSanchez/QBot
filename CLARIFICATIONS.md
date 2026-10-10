@@ -360,7 +360,7 @@ result (or failure) is announced publicly with who did it and both paths.
 
 ## Scheduled drive-space report (2026-10-09)
 
-At **8:00 AM, 12:00 PM and 10:00 PM Central** the bot posts the same embed
+At **8:00 AM, 12:00 PM, 4:00 PM and 10:00 PM Central** the bot posts the same embed
 `/drive-check` shows (all drives except C:, with a "Checked …" footer) to
 `Discord:DriveCheckChannelId` (set to `1547823750517489696`). Leave it unset
 to turn the report off.
