@@ -54,6 +54,14 @@ jobs:
               Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
             }
 
+          # The bot process is gone by now, but the scheduled task can still be "Running" — e.g. its
+          # launcher left waiting on a keypress after a crash. Task Scheduler silently ignores
+          # `schtasks /run` while an instance is running, which made deploys "succeed" without ever
+          # starting the bot. Ending the task here guarantees the Start step launches a fresh one.
+          # (Nothing to end is the normal case, so the error is ignored.)
+          schtasks /end /tn "DownloadBot" 2>&1 | Out-Null
+          $global:LASTEXITCODE = 0
+
       - name: Build
         shell: pwsh
         run: |
