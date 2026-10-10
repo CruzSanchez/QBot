@@ -27,7 +27,16 @@ public sealed class CompletionPollerService(
         {
             foreach (var download in tracking.GetAll())
             {
-                await CheckOneAsync(download, stoppingToken);
+                // Never let one download's failure (e.g. Discord unreachable while announcing) escape
+                // the loop — an unhandled exception here stops the whole host.
+                try
+                {
+                    await CheckOneAsync(download, stoppingToken);
+                }
+                catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+                {
+                    logger.LogWarning(ex, "Unexpected failure checking {Title}; will retry next poll", download.Title);
+                }
             }
 
             await Task.Delay(interval, stoppingToken).ContinueWith(_ => { }, TaskScheduler.Default);
@@ -57,11 +66,16 @@ public sealed class CompletionPollerService(
         if (state.IsError)
         {
             logger.LogWarning("Detected failure for \"{Title}\" (hash {Hash}): state={State}", download.Title, download.InfoHash, state.State);
+
+            // Stays tracked until the alert actually goes out, so a Discord outage retries it next poll
+            // instead of silently losing it.
+            if (!await AnnounceAsync(download, "Failed",
+                    $"**{download.Title}** — state: `{state.State}`\nCheck the tracker/source, or remove and re-search it.",
+                    DashboardFormatter.RedColor, includeCancelButton: true))
+                return;
+
             tracking.Untrack(download.InfoHash);
             _stallTracking.TryRemove(download.InfoHash, out _);
-            await AnnounceAsync(download, "Failed",
-                $"**{download.Title}** — state: `{state.State}`\nCheck the tracker/source, or remove and re-search it.",
-                DashboardFormatter.RedColor, includeCancelButton: true);
             return;
         }
 
@@ -69,9 +83,6 @@ public sealed class CompletionPollerService(
         {
             logger.LogInformation("Detected completion of \"{Title}\" (hash {Hash}): state={State} progress={Progress}",
                 download.Title, download.InfoHash, state.State, state.Progress);
-
-            tracking.Untrack(download.InfoHash);
-            _stallTracking.TryRemove(download.InfoHash, out _);
 
             // Seed only as long as it took the bot to notice completion, then stop — the user only wants
             // seeding for as long as the bot itself needs it, not indefinitely per qBittorrent's defaults.
@@ -84,8 +95,14 @@ public sealed class CompletionPollerService(
                 logger.LogWarning(ex, "Failed to stop seeding \"{Title}\" after completion", download.Title);
             }
 
-            await AnnounceAsync(download, "Finished downloading", $"**{download.Title}**",
-                DashboardFormatter.GreenColor, includeCancelButton: false);
+            // Untracked only once announced, so an outage retries the ping next poll (stopping the
+            // torrent again meanwhile is harmless).
+            if (!await AnnounceAsync(download, "Finished downloading", $"**{download.Title}**",
+                    DashboardFormatter.GreenColor, includeCancelButton: false))
+                return;
+
+            tracking.Untrack(download.InfoHash);
+            _stallTracking.TryRemove(download.InfoHash, out _);
             return;
         }
 
@@ -111,12 +128,14 @@ public sealed class CompletionPollerService(
             DashboardFormatter.YellowColor, includeCancelButton: true);
     }
 
-    private async Task AnnounceAsync(TrackedDownload download, string title, string description, Color color, bool includeCancelButton)
+    // Returns false only when the send itself failed (worth retrying). An unresolvable channel returns
+    // true: retrying forever wouldn't help, so the download is treated as handled.
+    private async Task<bool> AnnounceAsync(TrackedDownload download, string title, string description, Color color, bool includeCancelButton)
     {
         if (discord.GetChannel(download.ChannelId) is not IMessageChannel channel)
         {
             logger.LogWarning("Could not resolve Discord channel {ChannelId} to announce {Title}", download.ChannelId, download.Title);
-            return;
+            return true;
         }
 
         var embed = new EmbedBuilder()
@@ -132,7 +151,17 @@ public sealed class CompletionPollerService(
             ? new ComponentBuilder().WithButton("Cancel this download", $"poller-cancel:{download.InfoHash}", ButtonStyle.Secondary).Build()
             : null;
 
-        await channel.SendMessageAsync($"<@{download.UserId}>", embed: embed, components: components);
+        try
+        {
+            await channel.SendMessageAsync($"<@{download.UserId}>", embed: embed, components: components);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to announce \"{Title}\" to channel {ChannelId}; will retry next poll", download.Title, download.ChannelId);
+            return false;
+        }
+
         logger.LogInformation("Announced \"{Title}\" to channel {ChannelId}", download.Title, download.ChannelId);
+        return true;
     }
 }

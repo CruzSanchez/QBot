@@ -39,7 +39,17 @@ public sealed class DashboardService(
 
         do
         {
-            await RefreshAsync(channelId.Value, interval, stoppingToken);
+            // A refresh failing (Discord or the network blipping) must never escape this loop: an
+            // unhandled exception in any BackgroundService stops the whole host, which is exactly how a
+            // brief outage once took the entire bot down. Skip this tick and try again on the next.
+            try
+            {
+                await RefreshAsync(channelId.Value, interval, stoppingToken);
+            }
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
+            {
+                logger.LogWarning(ex, "Dashboard refresh failed; will retry next tick");
+            }
         } while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
@@ -75,7 +85,10 @@ public sealed class DashboardService(
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "Failed to look up dashboard message {MessageId}; will repost", id);
+                // GetMessageAsync returns null for a deleted message, so an exception here is a real
+                // (usually network) failure — reposting would just create a duplicate dashboard.
+                logger.LogWarning(ex, "Failed to look up dashboard message {MessageId}; will retry next tick", id);
+                return;
             }
         }
 
@@ -86,9 +99,9 @@ public sealed class DashboardService(
                 await existing.ModifyAsync(m => m.Embed = embed);
                 return;
             }
-            catch (Exception ex)
+            catch (global::Discord.Net.HttpException ex) when (ex.DiscordCode == DiscordErrorCode.UnknownMessage)
             {
-                logger.LogWarning(ex, "Failed to edit dashboard message {MessageId}; reposting", existing.Id);
+                logger.LogWarning("Dashboard message {MessageId} no longer exists; reposting", existing.Id);
             }
         }
 

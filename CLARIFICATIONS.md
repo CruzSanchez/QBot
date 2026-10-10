@@ -370,3 +370,20 @@ to turn the report off.
   it doesn't catch up later. A failed post logs a Warning, not an Error, so it
   doesn't trigger the error-log upload.
 - The next run time is logged at startup and after each post.
+
+## A network blip no longer takes the whole bot down (2026-10-10)
+
+On 2026-10-10 at ~06:12 the server briefly couldn't resolve discord.com. A Discord
+send failed inside the dashboard refresh and then inside a completion alert;
+neither was caught, and .NET stops the *entire host* when any background
+service throws — so the bot shut down at 06:13 and stayed down (nothing
+restarts it; the scheduled drive reports and everything else stopped too).
+- The dashboard refresh and the download poller now catch per-tick failures,
+  log a Warning, and try again on the next tick.
+- A download that finishes or fails stays tracked until its Discord alert has
+  actually been delivered, so an outage delays the ping instead of losing it.
+- The dashboard only reposts itself when its message was really deleted — not
+  when a lookup merely failed — so an outage can't create duplicate dashboards.
+- Still not covered: if the bot process dies for some other reason, nothing
+  relaunches it until the next deploy or manual start. Say so if you want the
+  startup scheduled task set to restart on failure.
