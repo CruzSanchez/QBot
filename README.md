@@ -97,6 +97,22 @@ For day-to-day use (or if whoever's running the server isn't a developer):
   yourself rather than expecting it to happen silently.
 - **`uninstall-startup-task.bat`** — removes that scheduled task.
 
+## Reading the server's logs remotely
+
+`setup-remote-shell.ps1` (run once on the server) turns on SSH over Tailscale, and
+`server-logs.ps1` uses it to read the bot's log from another PC without a remote
+desktop session. Read-only:
+
+```powershell
+.\server-logs.ps1                  # last 60 meaningful lines of today's log
+.\server-logs.ps1 -Errors          # only warnings / errors / fatals
+.\server-logs.ps1 -Search jackett  # only lines containing some text
+.\server-logs.ps1 -Follow          # keep streaming new lines (Ctrl+C to stop)
+```
+
+Also `-Lines N`, `-Date yyyyMMdd`, and `-Raw` (no filtering). See the header of the
+script for details.
+
 ## Auto-deploy on push
 
 `.github/workflows/deploy.yml` runs on a self-hosted GitHub Actions runner
