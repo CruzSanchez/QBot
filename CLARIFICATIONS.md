@@ -412,3 +412,17 @@ process was killed in Task Manager on the server, so the restart now lives in
 - `install-startup-task.bat` is still worth running once: it removes Task
   Scheduler's default 3-day run limit and passes `unattended`. Its
   restart-on-failure setting is harmless but redundant now.
+
+## /search — find a folder anywhere in Plex (2026-10-10)
+
+`/search search:<text>` lists every folder whose name contains the text, across
+every Plex category on every drive (`<drive>\plex\<category>\<folder>`, all
+ready drives except C:), with its drive and category. Same live,
+punctuation-tolerant matching as `/delete` and `/move` ("my name is earl" finds
+`My.Name.Is.Earl.S01`). Open to everyone and read-only; the reply is public.
+- Shows the first 25 matches and says so if there are more.
+- Matches folders one level inside a category only (a TV show's folder, not
+  its season folders or episode files), and not loose files sitting directly in
+  a category folder. Say so if you want those included.
+- It scans the disks live rather than using the 12-hour library cache, so
+  something added a minute ago shows up.

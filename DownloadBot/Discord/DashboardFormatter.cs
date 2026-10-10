@@ -48,6 +48,20 @@ public static class DashboardFormatter
         return builder.Build();
     }
 
+    // /search results: one line per folder with its drive and category. truncated = more matched than shown.
+    public static Embed BuildFolderSearchEmbed(string search, IReadOnlyList<PlexFolder> folders, bool truncated)
+    {
+        var builder = new EmbedBuilder()
+            .WithColor(BlurpleColor)
+            .WithTitle(Truncate($"Plex folders matching \"{search}\"", 250))
+            .WithDescription(string.Join('\n', folders.Select(f => $"📁 **{Truncate(f.Name, 100)}** — {f.Drive} • {f.Category}")));
+
+        if (truncated)
+            builder.WithFooter($"Showing the first {folders.Count} — narrow the search to see others");
+
+        return builder.Build();
+    }
+
     private static string FormatLine(TorrentState t) =>
         $"**{Truncate(t.Name, 80)}**\n{ActiveDownloadFormatter.FormatProgressBar(t.Progress)} {t.Progress * 100:F1}% — " +
         $"{ActiveDownloadFormatter.FormatSpeedWithState(t.DownloadSpeedBytesPerSec, t.State)} — {ActiveDownloadFormatter.FormatEta(t.EtaSeconds)}";

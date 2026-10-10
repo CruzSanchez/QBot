@@ -351,6 +351,12 @@ public sealed class DownloadBotService(
             .AddOption("search", ApplicationCommandOptionType.String, "Part of the folder name to look for", isRequired: true)
             .Build();
 
+        var searchCommand = new SlashCommandBuilder()
+            .WithName("search")
+            .WithDescription("Look up a folder name in every Plex category on every drive")
+            .AddOption("search", ApplicationCommandOptionType.String, "Part of the folder name to look for", isRequired: true)
+            .Build();
+
         try
         {
             if (options.Value.DevGuildId is { } guildId)
@@ -367,6 +373,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(renameFolderCommand, guildId);
                 await client.Rest.CreateGuildCommand(deleteCommand, guildId);
                 await client.Rest.CreateGuildCommand(moveCommand, guildId);
+                await client.Rest.CreateGuildCommand(searchCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -383,6 +390,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(renameFolderCommand);
                 await client.Rest.CreateGlobalCommand(deleteCommand);
                 await client.Rest.CreateGlobalCommand(moveCommand);
+                await client.Rest.CreateGlobalCommand(searchCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -456,6 +464,9 @@ public sealed class DownloadBotService(
                 break;
             case "move":
                 await HandleMoveAsync(command);
+                break;
+            case "search":
+                await HandleSearchAsync(command);
                 break;
         }
     }
@@ -882,6 +893,35 @@ public sealed class DownloadBotService(
 
         // The picker/confirm stay private to the mod; the outcome is posted publicly as an audit trail.
         await component.FollowupAsync($"🗑️ **{component.User.Username}** deleted `{folder.Path}` and everything in it.");
+    }
+
+    // Read-only and open to everyone (unlike /delete and /move): the same live, punctuation-tolerant
+    // folder lookup, just listing what's there and where.
+    private async Task HandleSearchAsync(SocketSlashCommand command)
+    {
+        const int shown = 25;
+        var search = ((string)command.Data.Options.First(o => o.Name == "search").Value).Trim();
+
+        logger.LogInformation("/search invoked by {User}: search={Search}", command.User.Username, search);
+
+        if (search.Length == 0)
+        {
+            await command.RespondAsync("Give me part of a folder name to search for.", ephemeral: true);
+            return;
+        }
+
+        // Walking every drive can outlast Discord's 3-second ack window.
+        await command.DeferAsync();
+
+        var matches = PlexFolderFinder.FindMatching(PlexFolderFinder.GetPlexRoots(), search, max: shown + 1);
+        if (matches.Count == 0)
+        {
+            await command.FollowupAsync($"No folders matching `{search}` in any Plex category on any drive.");
+            return;
+        }
+
+        var truncated = matches.Count > shown;
+        await command.FollowupAsync(embed: DashboardFormatter.BuildFolderSearchEmbed(search, matches.Take(shown).ToList(), truncated));
     }
 
     private async Task HandleMoveAsync(SocketSlashCommand command)
@@ -1410,6 +1450,9 @@ public sealed class DownloadBotService(
                 "Mods only. Type part of a folder name; every Plex category folder on every drive is " +
                 "searched. Pick a match, confirm, and it's **permanently deleted with everything in it**. " +
                 "Cancel is available at every step.")
+            .AddField("/search search",
+                "Look up part of a folder name across every Plex category on every drive; shows each match " +
+                "with its drive and category. Ignores case and punctuation (\"my name is earl\" finds My.Name.Is.Earl).")
             .AddField("/move search",
                 "Mods only. Search works like `/delete`; then pick the destination category/drive, confirm, " +
                 "and the folder is moved (never overwriting an existing one). Cancel at any step; the " +
