@@ -388,31 +388,27 @@ restarts it; the scheduled drive reports and everything else stopped too).
   relaunches it until the next deploy or manual start. Say so if you want the
   startup scheduled task set to restart on failure.
 
-## Restart-on-crash scheduled task (2026-10-10)
+## Restart-on-crash: a loop in run-bot.bat (2026-10-10)
 
-- [ ] **Re-run `install-startup-task.bat` on the server** (as Administrator).
-      **No Windows password needed**: it updates the existing `DownloadBot`
-      task in place, keeping the credentials Task Scheduler already stored for
-      it (if the task is missing it creates one with an S4U logon — runs when
-      logged out, no password stored). If the script warns that the logon type
-      changed, or the bot stops starting while logged out, re-run it as
-      `install-startup-task.bat -WithPassword`. The updated task:
-      - **restarts the bot 1 minute after a crash** (any non-zero exit code, up
-        to 999 times). A clean stop — Ctrl+C or the deploy's `POST /shutdown`,
-        both exit code 0 — is *not* restarted, so deploys still work normally.
-      - has **no run-time limit**. `schtasks /create` defaults to "stop the task
-        after 3 days", which would have been killing the bot every 72 hours with
-        no restart; this removes that.
-      - runs `run-bot.bat unattended`, which skips the final `pause` (it would
-        hang a task nobody's watching) and passes the bot's real exit code back
-        to Task Scheduler so it can tell a crash from a clean stop.
-- [ ] **Test it once** after installing: `schtasks /run /tn DownloadBot`, then end
-      the `DownloadBot` process in Task Manager — it should come back within
-      about a minute (check Task Scheduler -> DownloadBot -> History, or the
-      Discord "bot started" notice). If it doesn't, the restart-on-failure
-      setting isn't firing on that Windows build; tell me and I'll switch to a
-      restart loop inside `run-bot.bat` instead.
-- Caveat: if the deploy workflow ever has to force-kill a stuck bot, that
-  non-zero exit also triggers a restart a minute later. That's harmless in
-  practice (the restart runs the freshly built version), just don't be
-  surprised by it.
+Task Scheduler's own "restart on failure" setting did **not** fire when the bot
+process was killed in Task Manager on the server, so the restart now lives in
+`run-bot.bat` itself and doesn't depend on that setting at all:
+- If `dotnet run` exits with a **non-zero** code (a crash, the host stopping on
+  an unhandled exception, the process being killed), the script waits 15
+  seconds and starts it again, up to 50 restarts per launch (so a bot that can't
+  start at all — bad config — doesn't loop forever).
+- A **clean stop** (exit code 0 — Ctrl+C, or the deploy's `POST /shutdown`) is
+  *not* restarted, so deploys behave exactly as before. If a deploy ever has to
+  force-kill a stuck bot, the workflow's `schtasks /end` removes the loop
+  before its 15-second delay is up, so it can't respawn mid-build.
+- Applies however it's started (double-click, scheduled task). Only the final
+  `pause` is skipped when run with `unattended`, as the scheduled task does.
+- Tested here with a stand-in `dotnet.exe`: two crashes -> two restarts -> clean
+  stop ends the script; an immediate clean stop is not restarted.
+- To test on the server: kill the **`DownloadBot.exe`** process in Task Manager
+  (not the parent `dotnet.exe`) — it should be back in ~15-20 seconds. A new
+  loop only applies to a *new* run of the task, so after this deploys, the
+  deploy's own restart picks it up automatically.
+- `install-startup-task.bat` is still worth running once: it removes Task
+  Scheduler's default 3-day run limit and passes `unattended`. Its
+  restart-on-failure setting is harmless but redundant now.

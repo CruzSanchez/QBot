@@ -1,6 +1,6 @@
 # Sets up the "DownloadBot" scheduled task that runs run-bot.bat:
 #   - starts at logon of the current user, like the original install-startup-task.bat
-#   - RESTARTS ON FAILURE: if the bot exits with a non-zero code (a crash, or the host stopping on an
+#   - Restart-on-failure setting (harmless, but run-bot.bat's own loop is what actually restarts the bot): if the bot exits with a non-zero code (a crash, or the host stopping on an
 #     unhandled exception), Task Scheduler relaunches it after 1 minute, up to 999 times. A clean stop
 #     (exit code 0 - Ctrl+C, or the deploy workflow's POST /shutdown) is not restarted.
 #   - NO TIME LIMIT: tasks created by `schtasks /create` default to "stop after 3 days", which would
