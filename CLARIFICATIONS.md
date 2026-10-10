@@ -390,9 +390,13 @@ restarts it; the scheduled drive reports and everything else stopped too).
 
 ## Restart-on-crash scheduled task (2026-10-10)
 
-- [ ] **Re-run `install-startup-task.bat` on the server** (as Administrator; it
-      asks for your Windows password, same as before). It replaces the existing
-      `DownloadBot` task with one that:
+- [ ] **Re-run `install-startup-task.bat` on the server** (as Administrator).
+      **No Windows password needed**: it updates the existing `DownloadBot`
+      task in place, keeping the credentials Task Scheduler already stored for
+      it (if the task is missing it creates one with an S4U logon — runs when
+      logged out, no password stored). If the script warns that the logon type
+      changed, or the bot stops starting while logged out, re-run it as
+      `install-startup-task.bat -WithPassword`. The updated task:
       - **restarts the bot 1 minute after a crash** (any non-zero exit code, up
         to 999 times). A clean stop — Ctrl+C or the deploy's `POST /shutdown`,
         both exit code 0 — is *not* restarted, so deploys still work normally.
