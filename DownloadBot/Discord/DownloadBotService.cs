@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using global::Discord;
 using global::Discord.WebSocket;
 using DownloadBot.LocalLibrary;
+using DownloadBot.Plex;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
 using DownloadBot.YtDlp;
@@ -21,6 +22,7 @@ public sealed class DownloadBotService(
     ILibraryCache libraryCache,
     IDriveSpaceChecker driveSpaceChecker,
     IYtDlpRunner ytDlp,
+    IPlexRestarter plexRestarter,
     IOptions<DiscordOptions> options,
     IHostApplicationLifetime appLifetime,
     ILogger<DownloadBotService> logger) : BackgroundService
@@ -351,6 +353,11 @@ public sealed class DownloadBotService(
             .AddOption("search", ApplicationCommandOptionType.String, "Part of the folder name to look for", isRequired: true)
             .Build();
 
+        var restartPlexCommand = new SlashCommandBuilder()
+            .WithName("restart-plex")
+            .WithDescription("Mods only: restart Plex Media Server on the server")
+            .Build();
+
         var searchCommand = new SlashCommandBuilder()
             .WithName("search")
             .WithDescription("Look up a folder name in every Plex category on every drive")
@@ -374,6 +381,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(deleteCommand, guildId);
                 await client.Rest.CreateGuildCommand(moveCommand, guildId);
                 await client.Rest.CreateGuildCommand(searchCommand, guildId);
+                await client.Rest.CreateGuildCommand(restartPlexCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -391,6 +399,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(deleteCommand);
                 await client.Rest.CreateGlobalCommand(moveCommand);
                 await client.Rest.CreateGlobalCommand(searchCommand);
+                await client.Rest.CreateGlobalCommand(restartPlexCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -467,6 +476,9 @@ public sealed class DownloadBotService(
                 break;
             case "search":
                 await HandleSearchAsync(command);
+                break;
+            case "restart-plex":
+                await HandleRestartPlexAsync(command);
                 break;
         }
     }
@@ -893,6 +905,63 @@ public sealed class DownloadBotService(
 
         // The picker/confirm stay private to the mod; the outcome is posted publicly as an audit trail.
         await component.FollowupAsync($"🗑️ **{component.User.Username}** deleted `{folder.Path}` and everything in it.");
+    }
+
+    private async Task HandleRestartPlexAsync(SocketSlashCommand command)
+    {
+        logger.LogInformation("/restart-plex invoked by {User}", command.User.Username);
+
+        if (!IsMod(command.User))
+        {
+            logger.LogWarning("/restart-plex denied for {User}: missing Mods role", command.User.Username);
+            await command.RespondAsync("Only members with the Mods role can use `/restart-plex`.", ephemeral: true);
+            return;
+        }
+
+        var buttons = new ComponentBuilder()
+            .WithButton("Restart Plex", "plex-restart-yes", ButtonStyle.Danger)
+            .WithButton("Cancel", "plex-restart-no", ButtonStyle.Secondary)
+            .Build();
+
+        await command.RespondAsync(
+            "⚠️ Restart Plex Media Server? Anyone watching will be interrupted and need to press play again. " +
+            "It's usually back within a minute.", components: buttons, ephemeral: true);
+    }
+
+    private async Task HandlePlexRestartButtonAsync(SocketMessageComponent component)
+    {
+        if (component.Data.CustomId == "plex-restart-no")
+        {
+            logger.LogInformation("User {User} cancelled /restart-plex", component.User.Username);
+            await component.UpdateAsync(m => { m.Content = "Cancelled — Plex was not restarted."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        if (!IsMod(component.User))
+        {
+            logger.LogWarning("/restart-plex confirm denied for {User}: missing Mods role", component.User.Username);
+            await component.UpdateAsync(m => { m.Content = "Only members with the Mods role can use `/restart-plex`."; m.Components = EmptyComponents; });
+            return;
+        }
+
+        // The restart (kill, relaunch, wait for Plex to answer) takes well over Discord's 3-second ack window.
+        await component.DeferAsync();
+        await TryEditAsync(component, "Restarting Plex Media Server …");
+
+        var (ok, message) = await plexRestarter.RestartAsync();
+
+        if (ok)
+        {
+            logger.LogWarning("User {User} restarted Plex Media Server", component.User.Username);
+            await TryEditAsync(component, "🔄 Plex Media Server restarted.");
+            await AnnouncePubliclyAsync(component, $"🔄 **{component.User.Username}** restarted Plex Media Server. It's back up.");
+        }
+        else
+        {
+            logger.LogError("Plex restart requested by {User} failed: {Message}", component.User.Username, message);
+            await TryEditAsync(component, $"Plex restart failed: {message}");
+            await AnnouncePubliclyAsync(component, $"⚠️ **{component.User.Username}** tried to restart Plex Media Server but it failed: {message}");
+        }
     }
 
     // Read-only and open to everyone (unlike /delete and /move): the same live, punctuation-tolerant
@@ -1453,6 +1522,9 @@ public sealed class DownloadBotService(
             .AddField("/search search",
                 "Look up part of a folder name across every Plex category on every drive; shows each match " +
                 "with its drive and category. Ignores case and punctuation (\"my name is earl\" finds My.Name.Is.Earl).")
+            .AddField("/restart-plex",
+                "Mods only. Restarts Plex Media Server on the server after a confirm; anyone watching is " +
+                "interrupted. The result is announced publicly.")
             .AddField("/move search",
                 "Mods only. Search works like `/delete`; then pick the destination category/drive, confirm, " +
                 "and the folder is moved (never overwriting an existing one). Cancel at any step; the " +
@@ -1568,6 +1640,7 @@ public sealed class DownloadBotService(
             "switch-drive-cancel" => HandleSwitchDriveCancelAsync(component),
             "delete-cancel" or "delete-confirm-no" or "delete-confirm-yes" => HandleDeleteButtonAsync(component),
             "move-cancel" or "move-confirm-no" or "move-confirm-yes" => HandleMoveButtonAsync(component),
+            "plex-restart-yes" or "plex-restart-no" => HandlePlexRestartButtonAsync(component),
             _ => Task.CompletedTask
         };
     }

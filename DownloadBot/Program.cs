@@ -2,6 +2,7 @@ using global::Discord.WebSocket;
 using DownloadBot.Diagnostics;
 using DownloadBot.Discord;
 using DownloadBot.LocalLibrary;
+using DownloadBot.Plex;
 using DownloadBot.QBittorrent;
 using DownloadBot.Search;
 using DownloadBot.YtDlp;
@@ -37,6 +38,8 @@ try
     builder.Services.AddSingleton<DownloadTrackingStore>();
     builder.Services.AddSingleton<ActiveDriveStore>();
     builder.Services.AddSingleton<IYtDlpRunner, YtDlpRunner>();
+    builder.Services.Configure<PlexOptions>(builder.Configuration.GetSection("Plex"));
+    builder.Services.AddSingleton<IPlexRestarter, PlexRestarter>();
     builder.Services.AddSingleton<DiscordSocketClient>();
     builder.Services.AddSingleton<IPlexLibraryScanner, PlexLibraryScanner>();
     builder.Services.AddSingleton<IDriveSpaceChecker, DriveSpaceChecker>();

@@ -426,3 +426,28 @@ punctuation-tolerant matching as `/delete` and `/move` ("my name is earl" finds
   a category folder. Say so if you want those included.
 - It scans the disks live rather than using the 12-hour library cache, so
   something added a minute ago shows up.
+
+## /restart-plex — Mods-only Plex restart (2026-10-14)
+
+`/restart-plex` (Mods role, same `Discord:ModsRoleId` as `/delete` and `/move`)
+asks for a confirm, then restarts Plex Media Server on the server and announces
+the result publicly with who did it. Anyone mid-stream is interrupted and has
+to press play again; it's normally back within a minute.
+- It runs `restart-plex.ps1` from the repo root (the deploy puts it on the
+  server). Plex isn't a Windows service here — it's a normal app in the
+  logged-in desktop session — and the bot runs in a different, non-interactive
+  session, so Plex can't just be started from the bot (it would land in the
+  wrong session and die with it). The script stops Plex, then relaunches it
+  through a one-time scheduled task with an *Interactive* principal, which puts
+  it back in the desktop session, and waits for `http://localhost:32400/identity`
+  to answer. It leaves the Plex desktop app and `PlexUpdateService` alone.
+- It reports success only once Plex actually answers; if it doesn't within
+  `Plex:WaitSeconds` (default 90) the failure is shown in Discord.
+- A second restart while one is running is refused, so it can't kill the Plex
+  the first one just started.
+- `Plex:ExecutablePath` (default `C:\Program Files\Plex\Plex Media Server\Plex
+  Media Server.exe`) only needs setting if Plex is installed elsewhere.
+- The script also works by hand: `powershell -ExecutionPolicy Bypass -File .\restart-plex.ps1`.
+- [ ] **Try it once** after deploying (it needs the logged-in desktop session,
+      i.e. the server's auto-login, to be active). If it reports a failure, the
+      message tells me where it got stuck.
