@@ -1,6 +1,7 @@
 using global::Discord;
 using DownloadBot.LocalLibrary;
 using DownloadBot.QBittorrent;
+using DownloadBot.Search;
 
 namespace DownloadBot.Discord;
 
@@ -47,6 +48,15 @@ public static class DashboardFormatter
 
         return builder.Build();
     }
+
+    // /download's result picker. Release names can be hundreds of characters, so each is shortened: ten
+    // untruncated names once pushed the description past Discord's 4096 limit, Build() threw, and the
+    // command was left stuck on "thinking…" with no picker.
+    public static Embed BuildPickerEmbed(string title, string type, IReadOnlyList<SearchResult> results) =>
+        new EmbedBuilder()
+            .WithTitle(Truncate($"Results for \"{title}\" ({type})", 250))
+            .WithDescription(string.Join('\n', results.Select((r, i) => $"**{i + 1}.** {Truncate(r.Title, 150)} — {r.Seeders} seeders")))
+            .Build();
 
     // /search results: one line per folder with its drive and category. truncated = more matched than shown.
     public static Embed BuildFolderSearchEmbed(string search, IReadOnlyList<PlexFolder> folders, bool truncated)

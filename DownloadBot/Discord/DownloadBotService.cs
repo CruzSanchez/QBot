@@ -436,6 +436,38 @@ public sealed class DownloadBotService(
 
     private async Task OnSlashCommandExecutedAsync(SocketSlashCommand command)
     {
+        try
+        {
+            await DispatchSlashCommandAsync(command);
+        }
+        catch
+        {
+            // Rethrown so RunSafelyAsync still logs it; the user is told first, because a command that was
+            // already acknowledged would otherwise sit on "thinking…" forever with nothing saying it failed.
+            await TryReportFailureAsync(command);
+            throw;
+        }
+    }
+
+    private async Task TryReportFailureAsync(SocketSlashCommand command)
+    {
+        const string message = "Something went wrong running that command, and it didn't finish. The error was logged — try again, or tell whoever runs the bot.";
+        try
+        {
+            if (command.HasResponded)
+                await command.FollowupAsync(message);
+            else
+                await command.RespondAsync(message, ephemeral: true);
+        }
+        catch (Exception ex)
+        {
+            // Typically the interaction token has expired; nothing more can be sent.
+            logger.LogDebug(ex, "Could not tell the user that /{Command} failed", command.Data.Name);
+        }
+    }
+
+    private async Task DispatchSlashCommandAsync(SocketSlashCommand command)
+    {
         switch (command.Data.Name)
         {
             case "download":
@@ -1854,10 +1886,7 @@ public sealed class DownloadBotService(
             .WithSelectMenu(menu)
             .WithButton("Cancel", "download-pick-cancel", ButtonStyle.Secondary, row: 1);
 
-        var embed = new EmbedBuilder()
-            .WithTitle($"Results for \"{title}\" ({type})")
-            .WithDescription(string.Join('\n', top.Select((r, i) => $"**{i + 1}.** {r.Title} — {r.Seeders} seeders")))
-            .Build();
+        var embed = DashboardFormatter.BuildPickerEmbed(title, type, top);
 
         var message = await command.FollowupAsync(embed: embed, components: componentBuilder.Build());
         _pendingPicks[message.Id] = new PendingPick(type, top);
