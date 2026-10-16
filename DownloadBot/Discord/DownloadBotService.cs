@@ -486,13 +486,19 @@ public sealed class DownloadBotService(
     // Shows free space per configured drive (like /drive-check) alongside a picker, instead of asking
     // for a bare drive letter blind — same "see what you're choosing between" pattern as /download's
     // search-result picker and /cancel's torrent picker.
-    private Task HandleSwitchDriveAsync(SocketSlashCommand command)
+    private async Task HandleSwitchDriveAsync(SocketSlashCommand command)
     {
         var drives = activeDriveStore.AvailableDrives.OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
         if (drives.Count == 0)
         {
-            return command.RespondAsync("No drives configured in `QBittorrent:SavePaths`.", ephemeral: true);
+            await command.RespondAsync("No drives configured in `QBittorrent:SavePaths`.", ephemeral: true);
+            return;
         }
+
+        // Ack before touching the disks (a busy or spun-down drive can stall free-space reads past Discord's
+        // 3-second limit), and read them all in one pass off the calling thread instead of once per drive.
+        await command.DeferAsync(ephemeral: true);
+        var attached = await Task.Run(() => driveSpaceChecker.GetFreeSpace());
 
         var menu = new SelectMenuBuilder()
             .WithCustomId("switch-drive-pick")
@@ -502,7 +508,7 @@ public sealed class DownloadBotService(
         foreach (var drive in drives)
         {
             var isCurrent = string.Equals(drive, activeDriveStore.CurrentDrive, StringComparison.OrdinalIgnoreCase);
-            var space = driveSpaceChecker.GetFreeSpace(drive).FirstOrDefault();
+            var space = attached.FirstOrDefault(s => s.Name.Equals($"{drive}:", StringComparison.OrdinalIgnoreCase));
             var spaceText = space is null ? "not attached/ready" : $"{space.FreeGb:F2} GB free of {space.TotalGb:F2} GB";
 
             menu.AddOption(isCurrent ? $"{drive}: (current)" : $"{drive}:", drive, Truncate(spaceText, 100));
@@ -518,7 +524,7 @@ public sealed class DownloadBotService(
             .WithSelectMenu(menu)
             .WithButton("Cancel", "switch-drive-cancel", ButtonStyle.Secondary, row: 1);
 
-        return command.RespondAsync(embed: embed, components: buttons.Build(), ephemeral: true);
+        await command.FollowupAsync(embed: embed, components: buttons.Build(), ephemeral: true);
     }
 
     private Task HandleSwitchDrivePickAsync(SocketMessageComponent component)
@@ -1435,33 +1441,40 @@ public sealed class DownloadBotService(
         $"**{Truncate(t.Name, 80)}** — {t.Progress * 100:F1}% — " +
         $"{ActiveDownloadFormatter.FormatSpeedWithState(t.DownloadSpeedBytesPerSec, t.State)}, {ActiveDownloadFormatter.FormatEta(t.EtaSeconds)}";
 
-    private Task HandleDriveCheckAsync(SocketSlashCommand command)
+    private async Task HandleDriveCheckAsync(SocketSlashCommand command)
     {
         var driveOption = command.Data.Options.FirstOrDefault(o => o.Name == "drive")?.Value as string;
+
+        logger.LogInformation("/drive-check invoked by {User}: drive={Drive}", command.User.Username, driveOption ?? "(all)");
+
+        // Ack first, look up after: reading free space can stall for several seconds on a busy or
+        // spun-down disk (qBittorrent hammering the drives), and Discord drops an interaction that isn't
+        // answered within 3 seconds. Done off the calling thread too, so a slow drive can't also block
+        // the gateway connection (which logged "a handler is blocking the gateway task").
+        await command.DeferAsync();
 
         IReadOnlyList<DriveSpace> results;
         try
         {
-            results = driveSpaceChecker.GetFreeSpace(driveOption);
+            results = await Task.Run(() => driveSpaceChecker.GetFreeSpace(driveOption));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Failed to check drive space");
-            return command.RespondAsync($"Failed to check drive space: {ex.Message}", ephemeral: true);
+            await command.FollowupAsync($"Failed to check drive space: {ex.Message}");
+            return;
         }
 
         if (results.Count == 0)
         {
-            var message = driveOption is null
+            await command.FollowupAsync(driveOption is null
                 ? "No attached drives found (other than C:)."
-                : $"Drive **{DriveSpaceChecker.NormalizeDriveName(driveOption)}** not found or not ready.";
-            return command.RespondAsync(message, ephemeral: true);
+                : $"Drive **{DriveSpaceChecker.NormalizeDriveName(driveOption)}** not found or not ready.");
+            return;
         }
 
-        logger.LogInformation("/drive-check invoked by {User}: drive={Drive} -> {Count} result(s)",
-            command.User.Username, driveOption ?? "(all)", results.Count);
-
-        return command.RespondAsync(embed: DashboardFormatter.BuildDriveSpaceEmbed(results));
+        logger.LogInformation("/drive-check -> {Count} result(s)", results.Count);
+        await command.FollowupAsync(embed: DashboardFormatter.BuildDriveSpaceEmbed(results));
     }
 
     private static Task HandleHelpAsync(SocketSlashCommand command) =>
