@@ -128,10 +128,19 @@ public sealed class CompletionPollerService(
             DashboardFormatter.YellowColor, includeCancelButton: true);
     }
 
-    // Returns false only when the send itself failed (worth retrying). An unresolvable channel returns
-    // true: retrying forever wouldn't help, so the download is treated as handled.
+    // Returns false when the alert couldn't go out yet and is worth retrying next poll: the send failed, or
+    // Discord isn't connected yet (right after a restart this runs before the gateway is ready, when every
+    // channel looks "unresolvable" — treating that as handled silently dropped a finished-download ping).
+    // A channel that still can't be found while connected is genuinely gone, so that returns true:
+    // retrying forever wouldn't help.
     private async Task<bool> AnnounceAsync(TrackedDownload download, string title, string description, Color color, bool includeCancelButton)
     {
+        if (discord.ConnectionState != ConnectionState.Connected || discord.Guilds.Count == 0)
+        {
+            logger.LogInformation("Discord isn't ready yet; will announce \"{Title}\" on a later poll", download.Title);
+            return false;
+        }
+
         if (discord.GetChannel(download.ChannelId) is not IMessageChannel channel)
         {
             logger.LogWarning("Could not resolve Discord channel {ChannelId} to announce {Title}", download.ChannelId, download.Title);
