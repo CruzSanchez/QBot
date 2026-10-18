@@ -451,3 +451,10 @@ to press play again; it's normally back within a minute.
 - [ ] **Try it once** after deploying (it needs the logged-in desktop session,
       i.e. the server's auto-login, to be active). If it reports a failure, the
       message tells me where it got stuck.
+
+## /move also moves loose files (2026-10-18)
+
+A loose file in a category folder (see the note under `/delete`) moves like a
+folder does: pick a destination category/drive, confirm, done — never
+overwriting something of the same name. Across drives a file uses a plain copy
+then delete (no robocopy needed); folders still use `robocopy /MOVE`.

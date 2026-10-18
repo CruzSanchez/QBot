@@ -1,12 +1,14 @@
 namespace DownloadBot.LocalLibrary;
 
-public sealed record PlexFolder(string Path, string Name, string Drive, string Category);
+// A library item: a folder, or a loose file (a single-file torrent saves straight into the category
+// folder, e.g. Movies\Some.Movie.2026.1080p.mkv, with no folder around it).
+public sealed record PlexFolder(string Path, string Name, string Drive, string Category, bool IsFile = false);
 
 public sealed record PlexCategory(string Path, string Drive, string Category);
 
-// Live (uncached) lookup of library item folders for /delete: the direct children of every
-// <drive>\plex\<category> folder. Never yields a category folder itself or anything shallower or
-// deeper, so a delete can only ever remove a single library item's folder.
+// Live (uncached) lookup of library items for /search, /delete and /move: the direct children (folders
+// and loose files) of every <drive>\plex\<category> folder. Never yields a category folder itself or
+// anything shallower or deeper, so an action can only ever touch a single library item.
 public static class PlexFolderFinder
 {
     // Same drive rule as the rest of the library code: every ready drive except C:.
@@ -23,11 +25,16 @@ public static class PlexFolderFinder
 
         foreach (var root in plexRoots)
         foreach (var categoryDir in SafeDirectories(root))
-        foreach (var itemDir in SafeDirectories(categoryDir))
         {
-            var name = Path.GetFileName(itemDir);
-            if (wanted.Length > 0 && Normalize(name).Contains(wanted, StringComparison.Ordinal))
-                results.Add(new PlexFolder(itemDir, name, Path.GetPathRoot(itemDir)!.TrimEnd('\\'), Path.GetFileName(categoryDir)));
+            var category = Path.GetFileName(categoryDir);
+
+            foreach (var (itemPath, isFile) in SafeDirectories(categoryDir).Select(d => (d, false))
+                         .Concat(SafeFiles(categoryDir).Select(f => (f, true))))
+            {
+                var name = Path.GetFileName(itemPath);
+                if (wanted.Length > 0 && Normalize(name).Contains(wanted, StringComparison.Ordinal))
+                    results.Add(new PlexFolder(itemPath, name, Path.GetPathRoot(itemPath)!.TrimEnd('\\'), category, isFile));
+            }
         }
 
         return results
@@ -46,12 +53,12 @@ public static class PlexFolderFinder
             .ThenBy(c => c.Category, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    // Where source could be moved: any category other than the one it's already in, and only where no
-    // folder of that name exists yet (a move never merges into or overwrites an existing folder).
+    // Where source could be moved: any category other than the one it's already in, and only where
+    // nothing of that name exists yet (a move never merges into or overwrites an existing item).
     public static IReadOnlyList<PlexCategory> ValidDestinations(IEnumerable<PlexCategory> categories, PlexFolder source) =>
         categories
             .Where(c => !string.Equals(c.Path, Path.GetDirectoryName(source.Path), StringComparison.OrdinalIgnoreCase))
-            .Where(c => !Directory.Exists(Path.Combine(c.Path, source.Name)))
+            .Where(c => !Directory.Exists(Path.Combine(c.Path, source.Name)) && !File.Exists(Path.Combine(c.Path, source.Name)))
             .ToList();
 
     // True only for exactly <drive>\plex\<category>, never on C:.
@@ -96,6 +103,18 @@ public static class PlexFolderFinder
         try
         {
             return Directory.GetDirectories(path);
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string[] SafeFiles(string path)
+    {
+        try
+        {
+            return Directory.GetFiles(path);
         }
         catch
         {

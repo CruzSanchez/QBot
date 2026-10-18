@@ -7,10 +7,36 @@ public static class PlexFolderMover
     // Same drive: an instant rename. Different drive: Directory.Move can't cross volumes, so robocopy
     // /MOVE (built into Windows) copies and then removes each file — a partial failure leaves a
     // consistent split between source and destination rather than a half-deleted original.
+    // True for a library item that is a folder or a loose file.
+    public static bool Exists(string path) => Directory.Exists(path) || File.Exists(path);
+
+    // A loose file is just deleted; a folder is removed with everything in it.
+    public static void Delete(string path)
+    {
+        if (File.Exists(path))
+            File.Delete(path);
+        else
+            Directory.Delete(path, recursive: true);
+    }
+
     public static async Task<(bool Ok, string? Error)> MoveAsync(string source, string destination, CancellationToken cancellationToken = default)
     {
-        if (Directory.Exists(destination))
-            return (false, "A folder with that name already exists at the destination.");
+        if (Exists(destination))
+            return (false, "Something with that name already exists at the destination.");
+
+        // File.Move copies-then-deletes across drives on its own, so a loose file needs no robocopy.
+        if (File.Exists(source))
+        {
+            try
+            {
+                File.Move(source, destination);
+                return (true, null);
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+        }
 
         if (string.Equals(Path.GetPathRoot(source), Path.GetPathRoot(destination), StringComparison.OrdinalIgnoreCase))
         {

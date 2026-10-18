@@ -64,7 +64,7 @@ public static class DashboardFormatter
         var builder = new EmbedBuilder()
             .WithColor(BlurpleColor)
             .WithTitle(Truncate($"Plex folders matching \"{search}\"", 250))
-            .WithDescription(string.Join('\n', folders.Select(f => $"📁 **{Truncate(f.Name, 100)}** — {f.Drive} • {f.Category}")));
+            .WithDescription(string.Join('\n', folders.Select(f => $"{(f.IsFile ? "📄" : "📁")} **{Truncate(f.Name, 100)}** — {f.Drive} • {f.Category}")));
 
         if (truncated)
             builder.WithFooter($"Showing the first {folders.Count} — narrow the search to see others");

@@ -830,13 +830,13 @@ public sealed class DownloadBotService(
         var matches = PlexFolderFinder.FindMatching(PlexFolderFinder.GetPlexRoots(), search);
         if (matches.Count == 0)
         {
-            await command.FollowupAsync($"No folders matching `{search}` in any Plex category on any drive.", ephemeral: true);
+            await command.FollowupAsync($"Nothing matching `{search}` in any Plex category on any drive.", ephemeral: true);
             return;
         }
 
         var menu = new SelectMenuBuilder()
             .WithCustomId("delete-pick")
-            .WithPlaceholder("Choose a folder to delete");
+            .WithPlaceholder("Choose an item to delete");
 
         foreach (var (folder, index) in matches.Select((f, i) => (f, i)))
             menu.AddOption(Truncate(folder.Name, 100), index.ToString(), Truncate($"{folder.Drive} • {folder.Category}", 100));
@@ -847,7 +847,7 @@ public sealed class DownloadBotService(
             .Build();
 
         var message = await command.FollowupAsync(
-            $"Found {matches.Count} folder(s) matching `{search}`. Pick one to delete, or cancel.",
+            $"Found {matches.Count} item(s) matching `{search}`. Pick one to delete, or cancel.",
             components: components, ephemeral: true);
         _pendingDeletePicks[message.Id] = matches;
     }
@@ -877,7 +877,7 @@ public sealed class DownloadBotService(
 
         await component.UpdateAsync(m =>
         {
-            m.Content = $"⚠️ Permanently delete `{folder.Path}` and everything inside it? This can't be undone.";
+            m.Content = $"⚠️ Permanently delete `{folder.Path}`{(folder.IsFile ? "" : " and everything inside it")}? This can't be undone.";
             m.Components = buttons;
         });
     }
@@ -922,13 +922,13 @@ public sealed class DownloadBotService(
 
         try
         {
-            if (!Directory.Exists(folder.Path))
+            if (!PlexFolderMover.Exists(folder.Path))
             {
                 await component.ModifyOriginalResponseAsync(m => { m.Content = $"`{folder.Path}` no longer exists."; m.Components = EmptyComponents; });
                 return;
             }
 
-            Directory.Delete(folder.Path, recursive: true);
+            PlexFolderMover.Delete(folder.Path);
         }
         catch (Exception ex)
         {
@@ -939,10 +939,10 @@ public sealed class DownloadBotService(
         }
 
         logger.LogWarning("User {User} deleted folder {Path} and its contents", component.User.Username, folder.Path);
-        await component.ModifyOriginalResponseAsync(m => { m.Content = $"🗑️ Deleted `{folder.Path}` and everything in it."; m.Components = EmptyComponents; });
+        await component.ModifyOriginalResponseAsync(m => { m.Content = $"🗑️ Deleted `{folder.Path}`{(folder.IsFile ? "" : " and everything in it")}."; m.Components = EmptyComponents; });
 
         // The picker/confirm stay private to the mod; the outcome is posted publicly as an audit trail.
-        await component.FollowupAsync($"🗑️ **{component.User.Username}** deleted `{folder.Path}` and everything in it.");
+        await component.FollowupAsync($"🗑️ **{component.User.Username}** deleted `{folder.Path}`{(folder.IsFile ? "" : " and everything in it")}.");
     }
 
     private async Task HandleRestartPlexAsync(SocketSlashCommand command)
@@ -1023,7 +1023,7 @@ public sealed class DownloadBotService(
         var matches = PlexFolderFinder.FindMatching(PlexFolderFinder.GetPlexRoots(), search, max: shown + 1);
         if (matches.Count == 0)
         {
-            await command.FollowupAsync($"No folders matching `{search}` in any Plex category on any drive.");
+            await command.FollowupAsync($"Nothing matching `{search}` in any Plex category on any drive.");
             return;
         }
 
@@ -1055,19 +1055,19 @@ public sealed class DownloadBotService(
         var matches = PlexFolderFinder.FindMatching(PlexFolderFinder.GetPlexRoots(), search);
         if (matches.Count == 0)
         {
-            await command.FollowupAsync($"No folders matching `{search}` in any Plex category on any drive.", ephemeral: true);
+            await command.FollowupAsync($"Nothing matching `{search}` in any Plex category on any drive.", ephemeral: true);
             return;
         }
 
         var menu = new SelectMenuBuilder()
             .WithCustomId("move-pick")
-            .WithPlaceholder("Choose a folder to move");
+            .WithPlaceholder("Choose an item to move");
 
         foreach (var (folder, index) in matches.Select((f, i) => (f, i)))
             menu.AddOption(Truncate(folder.Name, 100), index.ToString(), Truncate($"{folder.Drive} • {folder.Category}", 100));
 
         var message = await command.FollowupAsync(
-            $"Found {matches.Count} folder(s) matching `{search}`. Pick one to move, or cancel.",
+            $"Found {matches.Count} item(s) matching `{search}`. Pick one to move, or cancel.",
             components: new ComponentBuilder().WithSelectMenu(menu).WithButton("Cancel", "move-cancel", ButtonStyle.Secondary).Build(),
             ephemeral: true);
         _pendingMovePicks[message.Id] = matches;
@@ -1194,7 +1194,7 @@ public sealed class DownloadBotService(
             return;
         }
 
-        if (!Directory.Exists(source))
+        if (!PlexFolderMover.Exists(source))
         {
             await TryEditAsync(component, $"`{source}` no longer exists.");
             return;
@@ -1562,7 +1562,7 @@ public sealed class DownloadBotService(
                 "invalid name just gets cleaned up automatically instead of failing.")
             .AddField("/delete search",
                 "Mods only. Type part of a folder name; every Plex category folder on every drive is " +
-                "searched. Pick a match, confirm, and it's **permanently deleted with everything in it**. " +
+                "searched (folders and loose files). Pick a match, confirm, and it's **permanently deleted** (a folder with everything in it). " +
                 "Cancel is available at every step.")
             .AddField("/search search",
                 "Look up part of a folder name across every Plex category on every drive; shows each match " +
