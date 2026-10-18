@@ -490,7 +490,7 @@ Supersedes the "1337x was tried and removed" note above.
 - **Per-indexer searches with a deadline.** With `Jackett:Indexers` = `"all"`, the bot now
   lists Jackett's configured indexers (cached 5 minutes, so a newly added one is picked
   up without a restart), asks each one separately and in parallel, and gives each
-  `Jackett:IndexerTimeoutSeconds` (default **6**). An indexer that hasn't answered in time
+  `Jackett:IndexerTimeoutSeconds` (default **5**). An indexer that hasn't answered in time
   is skipped for that search (logged as a Warning, not an Error); the fast ones always
   make it. If *every* indexer fails the user sees "Search failed". If Jackett's indexer
   list can't be fetched it falls back to Jackett's own combined search; setting
@@ -506,7 +506,7 @@ Supersedes the "1337x was tried and removed" note above.
   the exe) and registered under `HKCU\...\Run` as `FlareSolverr`, so it starts at every
   logon. These are server-side settings, not in this repo.
 - **Why the deadline matters for 1337x:** its first request per new search takes
-  ~10–14 s (Cloudflare's check is redone), which is what the 6-second cap protects
+  ~10–14 s (Cloudflare's check is redone), which is what the 5-second cap protects
   against. Warm/repeated searches are ~2 s. Expect 1337x results on some searches and
   not others; raise `IndexerTimeoutSeconds` to wait longer for it, or lower it to be
   quicker.

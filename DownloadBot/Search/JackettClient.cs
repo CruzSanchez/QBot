@@ -16,7 +16,7 @@ public sealed class JackettOptions
 
     // Per-indexer cap when Indexers is "all". A slow site (1337x behind Cloudflare takes 10-14 s on a new
     // search) is skipped for that search instead of holding the whole picker up; fast ones always make it.
-    public int IndexerTimeoutSeconds { get; set; } = 6;
+    public int IndexerTimeoutSeconds { get; set; } = 5;
 }
 
 public sealed class JackettClient(HttpClient httpClient, IOptions<JackettOptions> options, ILogger<JackettClient>? logger = null) : IJackettClient
