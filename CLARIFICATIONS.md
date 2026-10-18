@@ -326,10 +326,13 @@ on the confirmation.
 - Restricted to the role in `Discord:ModsRoleId` (the Mods role,
   `1551025784460681278`), re-checked on the command, the pick, and the confirm.
   If `ModsRoleId` is unset, nobody can use it.
-- Only ever matches folders exactly one level inside a category — never a
-  category folder itself (e.g. all of `Movies`), never files, never anything
-  deeper. A final shape check (`<drive>\plex\<category>\<item>`, not on C:)
-  runs again right before the delete.
+- Only ever matches items exactly one level inside a category: a folder, or a
+  **loose file** (a single-file torrent such as `MoviesSome.Movie.2026.1080p.mkv`
+  has no folder around it; before 2026-10-18 these were invisible to /delete,
+  /move and /search). Never a category folder itself (e.g. all of `Movies`),
+  never anything deeper. A folder is deleted with everything in it; a loose
+  file is just deleted. A final shape check (`<drive>plex<category><item>`,
+  not on C:) runs again right before the delete.
 - Every delete (or failed attempt) is also announced publicly in the channel with who did it and the full path; the picker and confirm stay private to the mod. It is logged at Warning too.
   Deleting a folder that qBittorrent, yt-dlp, or Plex has open can fail; the
   error is shown instead of the folder being half-removed silently.
@@ -421,9 +424,9 @@ ready drives except C:), with its drive and category. Same live,
 punctuation-tolerant matching as `/delete` and `/move` ("my name is earl" finds
 `My.Name.Is.Earl.S01`). Open to everyone and read-only; the reply is public.
 - Shows the first 25 matches and says so if there are more.
-- Matches folders one level inside a category only (a TV show's folder, not
-  its season folders or episode files), and not loose files sitting directly in
-  a category folder. Say so if you want those included.
+- Matches items one level inside a category: folders (a TV show's folder, not
+  its season folders or episode files) and, since 2026-10-18, loose files sitting
+  directly in a category folder (shown with a file icon instead of a folder icon).
 - It scans the disks live rather than using the 12-hour library cache, so
   something added a minute ago shows up.
 
