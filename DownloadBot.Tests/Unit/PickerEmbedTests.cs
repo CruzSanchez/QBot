@@ -24,6 +24,29 @@ public class PickerEmbedTests
     // Regression: ten very long release names pushed the description past Discord's 4096 limit, Build()
     // threw, and /download was left stuck on "thinking…".
     [Fact]
+    public void BuildPickerEmbed_ShowsTheNoteAsAFooterOnlyWhenGiven()
+    {
+        var results = new[] { new SearchResult("A Movie", "magnet:?a", 1, 1) };
+
+        Assert.Null(DashboardFormatter.BuildPickerEmbed("a movie", "movie", results).Footer);
+        Assert.Contains("looser search",
+            DashboardFormatter.BuildPickerEmbed("a movie 2160", "movie", results, "Nothing matched exactly, so this is a looser search.").Footer!.Value.Text);
+    }
+
+    [Fact]
+    public void BuildPickerEmbed_StaysWithinLimitsForAFullMenuOfLongNames()
+    {
+        // A Discord select menu holds 25 options; even that many very long names must fit the description.
+        var results = Enumerable.Range(0, 25)
+            .Select(i => new SearchResult(new string('x', 400), "magnet:?x", i, 1))
+            .ToList();
+
+        var embed = DashboardFormatter.BuildPickerEmbed("t", "tv", results);
+
+        Assert.True(embed.Description.Length <= 4096, $"description is {embed.Description.Length}");
+    }
+
+    [Fact]
     public void BuildPickerEmbed_StaysWithinDiscordLimitsForVeryLongNames()
     {
         var results = Enumerable.Range(0, 10)

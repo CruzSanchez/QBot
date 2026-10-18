@@ -1602,10 +1602,11 @@ public sealed class DownloadBotService(
     private async Task SearchAndPostPickerAsync(SocketSlashCommand command, string title, string type)
     {
         IReadOnlyList<SearchResult> results;
+        string usedQuery;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            results = await jackett.SearchAsync(title);
+            (results, usedQuery) = await jackett.SearchWithFallbackAsync(title);
         }
         catch (Exception ex)
         {
@@ -1614,8 +1615,8 @@ public sealed class DownloadBotService(
             return;
         }
 
-        logger.LogInformation("Jackett returned {Count} result(s) for {Query} in {ElapsedMs}ms",
-            results.Count, title, stopwatch.ElapsedMilliseconds);
+        logger.LogInformation("Jackett returned {Count} result(s) for {Query} (searched as \"{UsedQuery}\") in {ElapsedMs}ms",
+            results.Count, title, usedQuery, stopwatch.ElapsedMilliseconds);
 
         if (results.Count == 0)
         {
@@ -1623,8 +1624,14 @@ public sealed class DownloadBotService(
             return;
         }
 
-        await PostPickerAsync(command, title, type, results);
+        await PostPickerAsync(command, title, type, results, RelaxedNote(title, usedQuery));
     }
+
+    // Tells the user when nothing matched their exact words and a looser search was used instead.
+    private static string? RelaxedNote(string title, string usedQuery) =>
+        string.Equals(title, usedQuery, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : $"Nothing matched \"{title}\" exactly, so this is a looser search for \"{usedQuery}\".";
 
     // Checks the local Plex library for an existing match before spending a Jackett search on it.
     // Returns true (and posts a "search anyway?" confirmation instead) if something was found — this
@@ -1862,11 +1869,13 @@ public sealed class DownloadBotService(
     // TV shows tend to have far more scattered/duplicate releases (per-episode, per-season, remux vs
     // web-dl, etc.) than movies, so a picker capped at 5 more often misses the release you actually
     // want — 10 gives more room without approaching the select menu's 25-option limit.
-    private static readonly HashSet<string> TypesWithExpandedResults = new(StringComparer.OrdinalIgnoreCase) { "tv", "kids-tv" };
+    // How many releases the picker offers (a Discord select menu holds at most 25). Was 5 (10 for TV), which
+    // hid most of what a wider indexer set returns.
+    private const int PickerResultLimit = 15;
 
-    private async Task PostPickerAsync(SocketSlashCommand command, string title, string type, IReadOnlyList<SearchResult> results)
+    private async Task PostPickerAsync(SocketSlashCommand command, string title, string type, IReadOnlyList<SearchResult> results, string? note = null)
     {
-        var resultLimit = TypesWithExpandedResults.Contains(type) ? 10 : 5;
+        var resultLimit = PickerResultLimit;
         var top = results.Take(resultLimit).ToList();
 
         var menu = new SelectMenuBuilder()
@@ -1886,7 +1895,7 @@ public sealed class DownloadBotService(
             .WithSelectMenu(menu)
             .WithButton("Cancel", "download-pick-cancel", ButtonStyle.Secondary, row: 1);
 
-        var embed = DashboardFormatter.BuildPickerEmbed(title, type, top);
+        var embed = DashboardFormatter.BuildPickerEmbed(title, type, top, note);
 
         var message = await command.FollowupAsync(embed: embed, components: componentBuilder.Build());
         _pendingPicks[message.Id] = new PendingPick(type, top);
@@ -2080,9 +2089,10 @@ public sealed class DownloadBotService(
             }
 
             IReadOnlyList<SearchResult> results;
+            string usedQuery;
             try
             {
-                results = await jackett.SearchAsync(title);
+                (results, usedQuery) = await jackett.SearchWithFallbackAsync(title);
             }
             catch (Exception ex)
             {
@@ -2098,7 +2108,7 @@ public sealed class DownloadBotService(
             }
 
             // One picker message per title, posted independently, so each can be picked at its own pace/order.
-            await PostPickerAsync(command, title, type, results);
+            await PostPickerAsync(command, title, type, results, RelaxedNote(title, usedQuery));
             pickersPosted++;
         }
 

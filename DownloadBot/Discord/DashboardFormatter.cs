@@ -52,11 +52,22 @@ public static class DashboardFormatter
     // /download's result picker. Release names can be hundreds of characters, so each is shortened: ten
     // untruncated names once pushed the description past Discord's 4096 limit, Build() threw, and the
     // command was left stuck on "thinking…" with no picker.
-    public static Embed BuildPickerEmbed(string title, string type, IReadOnlyList<SearchResult> results) =>
-        new EmbedBuilder()
+    // note: shown as the footer, e.g. when the search had to be loosened to find anything.
+    public static Embed BuildPickerEmbed(string title, string type, IReadOnlyList<SearchResult> results, string? note = null)
+    {
+        // Each name gets an equal share of the ~4000 usable description characters (minus the "**n.** … —
+        // N seeders" decoration), capped at 150, so any number of results (up to the 25 a menu allows) fits.
+        var maxName = Math.Clamp(3800 / Math.Max(results.Count, 1) - 40, 40, 150);
+
+        var builder = new EmbedBuilder()
             .WithTitle(Truncate($"Results for \"{title}\" ({type})", 250))
-            .WithDescription(string.Join('\n', results.Select((r, i) => $"**{i + 1}.** {Truncate(r.Title, 150)} — {r.Seeders} seeders")))
-            .Build();
+            .WithDescription(string.Join('\n', results.Select((r, i) => $"**{i + 1}.** {Truncate(r.Title, maxName)} — {r.Seeders} seeders")));
+
+        if (!string.IsNullOrWhiteSpace(note))
+            builder.WithFooter(Truncate(note, 2000));
+
+        return builder.Build();
+    }
 
     // /search results: one line per folder with its drive and category. truncated = more matched than shown.
     public static Embed BuildFolderSearchEmbed(string search, IReadOnlyList<PlexFolder> folders, bool truncated)

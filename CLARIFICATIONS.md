@@ -461,3 +461,25 @@ A loose file in a category folder (see the note under `/delete`) moves like a
 folder does: pick a destination category/drive, confirm, done — never
 overwriting something of the same name. Across drives a file uses a plain copy
 then delete (no robocopy needed); folders still use `robocopy /MOVE`.
+
+## Wider searches: more indexers, looser retries, longer picker (2026-10-18)
+
+The bot only ever shows what Jackett returns, and Jackett had been cut to 4
+indexers (EZTV, Internet Archive, LimeTorrents, The Pirate Bay) when the slow ones
+were removed — so it found much less than qBittorrent's built-in search, which
+covers many more sites.
+- **Jackett (changed on the server, not in this repo):** added YTS, TheRARBG and
+  TorrentGalaxyClone via Jackett's API. Each was tested first (all under 0.6 s) so
+  the combined search stays at 2–4 s. Test: "you can see everything" went from 18
+  results to 118; "hacksaw ridge 2160" from 0 to 40.
+- **1337x was tried and removed again:** it returns an error (HTTP 400) here, which
+  normally means Cloudflare is blocking Jackett. It would need FlareSolverr
+  (a separate helper Jackett can use) to work. Say so if you want that set up.
+- **Looser retries (new):** indexers match *every* word, so an over-specific search
+  ("hacksaw ridge 2160" — releases say "2160p") used to come back empty. If a search
+  finds nothing, the bot now retries without quality words (2160, 1080p, x265…) and
+  then with trailing words dropped, never below two words and at most two retries.
+  The picker says when it did this ("Nothing matched … exactly, so this is a looser
+  search for …"). Applies to `/download` and `/download-many`.
+- **Longer picker:** now offers up to **15** releases (was 5, or 10 for TV), the
+  highest-seeded first. A Discord dropdown can hold 25 at most.
