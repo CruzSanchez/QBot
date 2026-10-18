@@ -23,6 +23,7 @@ public sealed class DownloadBotService(
     IDriveSpaceChecker driveSpaceChecker,
     IYtDlpRunner ytDlp,
     IPlexRestarter plexRestarter,
+    DownloadBot.Vpn.IVpnGuard vpnGuard,
     IOptions<DiscordOptions> options,
     IHostApplicationLifetime appLifetime,
     ILogger<DownloadBotService> logger) : BackgroundService
@@ -466,8 +467,17 @@ public sealed class DownloadBotService(
         }
     }
 
+    private const string VpnDownMessage = "🔒 The server isn't connected to the VPN, so downloads are disabled until it is.";
+
     private async Task DispatchSlashCommandAsync(SocketSlashCommand command)
     {
+        if (command.Data.Name is "download" or "download-many" or "download-yt" && !await vpnGuard.IsConnectedAsync())
+        {
+            logger.LogWarning("Blocked /{Command} from {User}: VPN not connected", command.Data.Name, command.User.Username);
+            await command.RespondAsync(VpnDownMessage, ephemeral: true);
+            return;
+        }
+
         switch (command.Data.Name)
         {
             case "download":
@@ -1921,6 +1931,12 @@ public sealed class DownloadBotService(
             // confirming it took can take several seconds, which would otherwise make the later
             // response miss the window and fail with "Unknown interaction".
             await component.DeferAsync();
+
+            if (!await vpnGuard.IsConnectedAsync())
+            {
+                await component.ModifyOriginalResponseAsync(m => { m.Content = VpnDownMessage; m.Embed = null; m.Components = EmptyComponents; });
+                return;
+            }
 
             if (!_pendingPicks.TryRemove(component.Message.Id, out var pick))
             {

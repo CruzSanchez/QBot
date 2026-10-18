@@ -40,6 +40,8 @@ try
     builder.Services.AddSingleton<IYtDlpRunner, YtDlpRunner>();
     builder.Services.Configure<PlexOptions>(builder.Configuration.GetSection("Plex"));
     builder.Services.AddSingleton<IPlexRestarter, PlexRestarter>();
+    builder.Services.Configure<DownloadBot.Vpn.VpnOptions>(builder.Configuration.GetSection("Vpn"));
+    builder.Services.AddSingleton<DownloadBot.Vpn.IVpnGuard, DownloadBot.Vpn.VpnGuard>();
     builder.Services.AddSingleton<DiscordSocketClient>();
     builder.Services.AddSingleton<IPlexLibraryScanner, PlexLibraryScanner>();
     builder.Services.AddSingleton<IDriveSpaceChecker, DriveSpaceChecker>();

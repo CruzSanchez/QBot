@@ -510,3 +510,10 @@ Supersedes the "1337x was tried and removed" note above.
   against. Warm/repeated searches are ~2 s. Expect 1337x results on some searches and
   not others; raise `IndexerTimeoutSeconds` to wait longer for it, or lower it to be
   quicker.
+
+## Downloads are blocked unless the server is on the VPN (2026-10-18)
+
+`/download`, `/download-many`, `/download-yt` and the picker selection reply "🔒 … not connected to the VPN" when ExpressVPN isn't up. Because ExpressVPN **split tunneling** is on (only qBittorrent uses the VPN), the bot's own public IP is always the home one, so the check instead finds the tunnel adapter (`Vpn:AdapterMatch`, default "ExpressVPN"), binds a 2-second request to its IP and requires an answer. It fails closed and is cached for 15 s. `Vpn:Enabled` turns it off.
+
+- qBittorrent is also bound to the ExpressVPN adapter (Options → Advanced → Network interface), so it can't leak if the VPN drops mid-download — the bot check only stops *new* downloads.
+- yt-dlp is not covered by the tunnel unless `yt-dlp.exe` is also set to "Only VPN" in ExpressVPN's split-tunneling list.
