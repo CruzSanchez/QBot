@@ -483,3 +483,30 @@ covers many more sites.
   search for …"). Applies to `/download` and `/download-many`.
 - **Longer picker:** now offers up to **15** releases (was 5, or 10 for TV), the
   highest-seeded first. A Discord dropdown can hold 25 at most.
+
+## One slow indexer no longer holds up the picker; duplicates removed; 1337x back (2026-10-18)
+
+Supersedes the "1337x was tried and removed" note above.
+- **Per-indexer searches with a deadline.** With `Jackett:Indexers` = `"all"`, the bot now
+  lists Jackett's configured indexers (cached 5 minutes, so a newly added one is picked
+  up without a restart), asks each one separately and in parallel, and gives each
+  `Jackett:IndexerTimeoutSeconds` (default **6**). An indexer that hasn't answered in time
+  is skipped for that search (logged as a Warning, not an Error); the fast ones always
+  make it. If *every* indexer fails the user sees "Search failed". If Jackett's indexer
+  list can't be fetched it falls back to Jackett's own combined search; setting
+  `Indexers` to anything other than `"all"` (e.g. `yts`) keeps the old single-request
+  behaviour. Jackett keeps working on a skipped indexer and caches the result, so the
+  *same search repeated a moment later* usually picks it up.
+- **Duplicates removed.** The same release found on several sites (same torrent hash;
+  otherwise same punctuation-insensitive name and size) is shown once, with the
+  best-seeded copy. A check of one movie's top 15 found only 9 distinct releases.
+- **1337x is back**, after FlareSolverr was started: FlareSolverr (in
+  `C:\Users\johnb\Downloads\flaresolverr_windows_x64`) wasn't running, which is why
+  1337x errored earlier. It is now launched hidden by `start-flaresolverr.vbs` (next to
+  the exe) and registered under `HKCU\...\Run` as `FlareSolverr`, so it starts at every
+  logon. These are server-side settings, not in this repo.
+- **Why the deadline matters for 1337x:** its first request per new search takes
+  ~10–14 s (Cloudflare's check is redone), which is what the 6-second cap protects
+  against. Warm/repeated searches are ~2 s. Expect 1337x results on some searches and
+  not others; raise `IndexerTimeoutSeconds` to wait longer for it, or lower it to be
+  quicker.
