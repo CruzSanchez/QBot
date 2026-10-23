@@ -63,6 +63,22 @@ public class LibraryFolderScannerTests : IDisposable
         Assert.Contains(FindMatches(_movies, "casino royale"), m => Path.GetFileName(m).StartsWith("James Bond"));
     }
 
+    [Theory]
+    [InlineData("casinoroyale")]
+    [InlineData("casino-royale")]
+    [InlineData("Casino.Royale.2006")]
+    public void NameMatches_IgnoresSpacesAndPunctuation(string query)
+    {
+        var (title, year) = TitleYear.Parse(query);
+        Assert.True(LibraryFolderScanner.NameMatches("James Bond Casino Royale (2006) [1080p]", title, year));
+    }
+
+    [Fact]
+    public void NameMatches_DoesNotMatchTheTailOfAWord()
+    {
+        Assert.False(LibraryFolderScanner.NameMatches("Spring (2014)", "ring", null));
+    }
+
     [Fact]
     public void FindMatches_FindsNestedTvShowFolder()
     {

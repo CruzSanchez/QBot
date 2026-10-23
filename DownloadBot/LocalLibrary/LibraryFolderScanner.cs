@@ -63,13 +63,24 @@ public static class LibraryFolderScanner
             yield return file;
     }
 
+    private static string Compact(string s) =>
+        new(s.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
     public static bool NameMatches(string candidateName, string title, int? year)
     {
         var (candidateTitle, candidateYear) = TitleYear.Parse(candidateName);
-        // Extra words in front still count ("James Bond Casino Royale" has "Casino Royale"); extra words
-        // after don't, so a sequel ("The Grudge 2") isn't mistaken for the original.
-        if (!candidateTitle.Equals(title, StringComparison.OrdinalIgnoreCase)
-            && !candidateTitle.EndsWith(" " + title, StringComparison.OrdinalIgnoreCase))
+        // Spaces and punctuation are ignored ("casinoroyale", "Casino-Royale"). Extra words in front still
+        // count ("James Bond Casino Royale" has "Casino Royale"); extra words after don't, so a sequel
+        // ("The Grudge 2") isn't mistaken for the original. Only word starts are tried so "ring" can't
+        // match the tail of "Spring".
+        var wanted = Compact(title);
+        if (wanted.Length == 0)
+            return false;
+        var matchesTitle = false;
+        for (var i = 0; i < candidateTitle.Length && !matchesTitle; i++)
+            if ((i == 0 || !char.IsLetterOrDigit(candidateTitle[i - 1])) && Compact(candidateTitle[i..]) == wanted)
+                matchesTitle = true;
+        if (!matchesTitle)
             return false;
         // Same title, different year (a remake/reboot) doesn't count as already having it.
         return year is null || candidateYear is null || year == candidateYear;
