@@ -66,7 +66,10 @@ public static class LibraryFolderScanner
     public static bool NameMatches(string candidateName, string title, int? year)
     {
         var (candidateTitle, candidateYear) = TitleYear.Parse(candidateName);
-        if (!string.Equals(candidateTitle, title, StringComparison.OrdinalIgnoreCase))
+        // Extra words in front still count ("James Bond Casino Royale" has "Casino Royale"); extra words
+        // after don't, so a sequel ("The Grudge 2") isn't mistaken for the original.
+        if (!candidateTitle.Equals(title, StringComparison.OrdinalIgnoreCase)
+            && !candidateTitle.EndsWith(" " + title, StringComparison.OrdinalIgnoreCase))
             return false;
         // Same title, different year (a remake/reboot) doesn't count as already having it.
         return year is null || candidateYear is null || year == candidateYear;

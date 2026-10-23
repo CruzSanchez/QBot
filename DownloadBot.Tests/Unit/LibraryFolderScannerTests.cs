@@ -56,6 +56,14 @@ public class LibraryFolderScannerTests : IDisposable
     }
 
     [Fact]
+    public void FindMatches_MatchesAFolderWithExtraWordsBeforeTheTitle()
+    {
+        Directory.CreateDirectory(Path.Combine(_movies, "James Bond Casino Royale (2006) [1080p]"));
+
+        Assert.Contains(FindMatches(_movies, "casino royale"), m => Path.GetFileName(m).StartsWith("James Bond"));
+    }
+
+    [Fact]
     public void FindMatches_FindsNestedTvShowFolder()
     {
         var matches = FindMatches(_tvShows, "Stranger Things 2016");
