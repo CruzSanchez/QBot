@@ -73,6 +73,18 @@ public class LibraryFolderScannerTests : IDisposable
         Assert.True(LibraryFolderScanner.NameMatches("James Bond Casino Royale (2006) [1080p]", title, year));
     }
 
+    [Theory]
+    [InlineData("Scary Movie (2026) [1080p]", "scary movie 6", null, true)]  // sequel number dropped
+    [InlineData("James Bond Casino Royale (2006)", "casino royal", null, true) ] // missing last letter
+    [InlineData("Scary Movie (2026)", "scary movie", 2000, false)]           // different year
+    [InlineData("Up (2009)", "up", null, false)]                              // too short to be "like"
+    [InlineData("Heat (1995)", "scary movie 6", null, false)]
+    public void LooseNameMatches_FindsLikeTitles(string folder, string query, int? year, bool expected)
+    {
+        var (title, parsedYear) = TitleYear.Parse(query);
+        Assert.Equal(expected, LibraryFolderScanner.LooseNameMatches(folder, title, year ?? parsedYear));
+    }
+
     [Fact]
     public void NameMatches_DoesNotMatchTheTailOfAWord()
     {

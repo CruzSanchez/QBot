@@ -46,6 +46,14 @@ public sealed class PlexLibraryScanner(ILibraryCache cache, ILogger<PlexLibraryS
             }
         }
 
+        if (matches.Count == 0)
+        {
+            foreach (var category in categories)
+                foreach (var entry in cache.GetEntries(category))
+                    if (LibraryFolderScanner.LooseNameMatches(entry.Name, title, year))
+                        matches.Add(entry.Path);
+        }
+
         logger.LogInformation(
             "Library check for \"{RawQuery}\" (parsed as \"{Title}\" {Year}, type {Type}): {MatchCount} match(es) from cache",
             rawQuery, title, year, type, matches.Count);

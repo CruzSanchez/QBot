@@ -66,6 +66,19 @@ public static class LibraryFolderScanner
     private static string Compact(string s) =>
         new(s.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
+    // Second-chance "like" match for when nothing matched exactly: the search (minus a trailing sequel number,
+    // since "Scary Movie 6" is filed as "Scary Movie (2026)") just has to appear inside the folder's title, so
+    // a missing last letter ("casino royal") or extra words after it also count. Needs 5+ letters to avoid
+    // matching everything; it only feeds a "search anyway?" prompt, so a stray hit is cheap.
+    public static bool LooseNameMatches(string candidateName, string title, int? year)
+    {
+        var (candidateTitle, candidateYear) = TitleYear.Parse(candidateName);
+        var wanted = Compact(System.Text.RegularExpressions.Regex.Replace(title, @"\s+\d{1,2}$", ""));
+        if (wanted.Length < 5 || !Compact(candidateTitle).Contains(wanted))
+            return false;
+        return year is null || candidateYear is null || year == candidateYear;
+    }
+
     public static bool NameMatches(string candidateName, string title, int? year)
     {
         var (candidateTitle, candidateYear) = TitleYear.Parse(candidateName);
