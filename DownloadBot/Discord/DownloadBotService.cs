@@ -359,6 +359,11 @@ public sealed class DownloadBotService(
             .WithDescription("Mods only: restart Plex Media Server on the server")
             .Build();
 
+        var bulkUploadCommand = new SlashCommandBuilder()
+            .WithName("bulk-upload")
+            .WithDescription("Mods only: add the top search result for every title in the server's BulkUpload file")
+            .Build();
+
         var searchCommand = new SlashCommandBuilder()
             .WithName("search")
             .WithDescription("Look up a folder name in every Plex category on every drive")
@@ -383,6 +388,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGuildCommand(moveCommand, guildId);
                 await client.Rest.CreateGuildCommand(searchCommand, guildId);
                 await client.Rest.CreateGuildCommand(restartPlexCommand, guildId);
+                await client.Rest.CreateGuildCommand(bulkUploadCommand, guildId);
                 await RemoveRetiredGuildCommandsAsync(guildId);
             }
             else
@@ -401,6 +407,7 @@ public sealed class DownloadBotService(
                 await client.Rest.CreateGlobalCommand(moveCommand);
                 await client.Rest.CreateGlobalCommand(searchCommand);
                 await client.Rest.CreateGlobalCommand(restartPlexCommand);
+                await client.Rest.CreateGlobalCommand(bulkUploadCommand);
                 await RemoveRetiredGlobalCommandsAsync();
             }
         }
@@ -471,7 +478,7 @@ public sealed class DownloadBotService(
 
     private async Task DispatchSlashCommandAsync(SocketSlashCommand command)
     {
-        if (command.Data.Name is "download" or "download-many" or "download-yt" && !await vpnGuard.IsConnectedAsync())
+        if (command.Data.Name is "download" or "download-many" or "download-yt" or "bulk-upload" && !await vpnGuard.IsConnectedAsync())
         {
             logger.LogWarning("Blocked /{Command} from {User}: VPN not connected", command.Data.Name, command.User.Username);
             await command.RespondAsync(VpnDownMessage, ephemeral: true);
@@ -521,6 +528,9 @@ public sealed class DownloadBotService(
                 break;
             case "restart-plex":
                 await HandleRestartPlexAsync(command);
+                break;
+            case "bulk-upload":
+                await HandleBulkUploadAsync(command);
                 break;
         }
     }
@@ -1580,6 +1590,10 @@ public sealed class DownloadBotService(
             .AddField("/restart-plex",
                 "Mods only. Restarts Plex Media Server on the server after a confirm; anyone watching is " +
                 "interrupted. The result is announced publicly.")
+            .AddField("/bulk-upload",
+                "Mods only. Reads the BulkUpload file on the server (a Plex-style listing: `Library,Path` rows) " +
+                "and adds the top search result for every title straight to qBittorrent — no picker. " +
+                "Skips titles already in the library, ones with no results, and ones that won't fit; max 50 per run.")
             .AddField("/move search",
                 "Mods only. Search works like `/delete`; then pick the destination category/drive, confirm, " +
                 "and the folder is moved (never overwriting an existing one). Cancel at any step; the " +
@@ -2142,6 +2156,140 @@ public sealed class DownloadBotService(
                     string.Join('\n', droppedTitles.Select(t => $"🚫 {t}")).Truncate(1024));
 
             await command.FollowupAsync(embed: summary.Build());
+        }
+    }
+
+    // Each title costs a Jackett search, and the interaction's follow-up token only lasts ~15 minutes.
+    private const int BulkUploadMaxTitles = 50;
+
+    // Unlike /download-many there's no picker: the top result (most seeders) for every title in the file is
+    // added straight to qBittorrent, so it's Mods-only. Titles already in the library, with no results, or too
+    // big for the destination drive are skipped and listed in the summary instead of being added blindly.
+    private async Task HandleBulkUploadAsync(SocketSlashCommand command)
+    {
+        logger.LogInformation("/bulk-upload invoked by {User}", command.User.Username);
+
+        if (!IsMod(command.User))
+        {
+            logger.LogWarning("/bulk-upload denied for {User}: missing Mods role", command.User.Username);
+            await command.RespondAsync("Only members with the Mods role can use `/bulk-upload`.", ephemeral: true);
+            return;
+        }
+
+        var file = options.Value.BulkUploadFile
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "BulkUpload", "BulkUpload.txt");
+        if (!File.Exists(file))
+        {
+            await command.RespondAsync($"No BulkUpload file found at `{file}`.", ephemeral: true);
+            return;
+        }
+
+        await command.DeferAsync();
+
+        var parsed = BulkUploadParser.Parse(await File.ReadAllTextAsync(file));
+        if (parsed.Items.Count == 0)
+        {
+            await command.FollowupAsync($"Nothing to add in `{file}` — expected `Library,Path` rows like a Plex library listing.");
+            return;
+        }
+
+        var items = parsed.Items.Take(BulkUploadMaxTitles).ToList();
+        var added = new List<string>();
+        var inLibrary = new List<string>();
+        var notFound = new List<string>();
+        var failed = new List<string>();
+        var noRoom = new List<string>();
+
+        foreach (var item in items)
+        {
+            try
+            {
+                if ((await libraryScanner.FindExistingAsync(item.Query, item.Type)).Count > 0)
+                {
+                    inLibrary.Add(item.Query);
+                    continue;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Library duplicate check failed for \"{Title}\"; adding anyway", item.Query);
+            }
+
+            IReadOnlyList<SearchResult> results;
+            try
+            {
+                (results, _) = await jackett.SearchWithFallbackAsync(item.Query);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Jackett search failed for query {Query}", item.Query);
+                failed.Add(item.Query);
+                continue;
+            }
+
+            if (results.Count == 0)
+            {
+                notFound.Add(item.Query);
+                continue;
+            }
+
+            var picked = results[0];
+            if (!HasRoomFor(picked, item.Type))
+            {
+                noRoom.Add($"{item.Query} ({picked.SizeBytes / 1024.0 / 1024 / 1024:F1} GB)");
+                continue;
+            }
+
+            var (ok, infoHash) = await AddToQBittorrentAsync(picked, item.Type);
+            if (!ok)
+            {
+                failed.Add(item.Query);
+                continue;
+            }
+
+            if (infoHash is not null)
+                tracking.Track(new TrackedDownload(infoHash, picked.Title, command.Channel.Id, command.User.Id));
+            added.Add($"{item.Query} → {picked.Title}");
+        }
+
+        var summary = new EmbedBuilder().WithTitle($"Bulk upload: {added.Count} of {items.Count} added");
+        AddListField(summary, "✅ Added", added);
+        AddListField(summary, "📁 Already in library", inLibrary);
+        AddListField(summary, "❌ No results", notFound);
+        AddListField(summary, "⚠️ Search or add failed", failed);
+        AddListField(summary, "💾 Not enough free space", noRoom);
+        AddListField(summary, "Skipped lines in the file", parsed.Skipped);
+        AddListField(summary, $"🚫 Over the {BulkUploadMaxTitles}-title limit — run again for these",
+            parsed.Items.Skip(BulkUploadMaxTitles).Select(i => i.Query));
+
+        logger.LogInformation("/bulk-upload finished: {Added} added, {InLibrary} in library, {NotFound} not found, {Failed} failed, {NoRoom} no room",
+            added.Count, inLibrary.Count, notFound.Count, failed.Count, noRoom.Count);
+        await command.FollowupAsync(embed: summary.Build());
+    }
+
+    private static void AddListField(EmbedBuilder embed, string name, IEnumerable<string> lines)
+    {
+        var list = lines.ToList();
+        if (list.Count > 0)
+            embed.AddField($"{name} ({list.Count})", string.Join('\n', list).Truncate(800));
+    }
+
+    // Same free-space rule as the picker's low-space warning, but a plain yes/no (a failed check counts as room,
+    // so our own check never blocks a download).
+    private bool HasRoomFor(SearchResult picked, string type)
+    {
+        try
+        {
+            if (!activeDriveStore.TryGetSavePath(type, out var savePath))
+                return true;
+
+            var drive = driveSpaceChecker.GetFreeSpace(Path.GetPathRoot(savePath)).FirstOrDefault();
+            return drive is null || drive.FreeGb >= picked.SizeBytes / 1024.0 / 1024.0 / 1024.0;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Free-space check failed for \"{Title}\"; assuming there's room", picked.Title);
+            return true;
         }
     }
 

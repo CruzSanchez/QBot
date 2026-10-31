@@ -20,4 +20,7 @@ public sealed class DiscordOptions
 
     // Role allowed to use /delete (permanently removes a folder and its contents). Unset = nobody can.
     public ulong? ModsRoleId { get; set; }
+
+    // File /bulk-upload reads. Unset = BulkUpload\BulkUpload.txt in the desktop folder of the account the bot runs as.
+    public string? BulkUploadFile { get; set; }
 }
