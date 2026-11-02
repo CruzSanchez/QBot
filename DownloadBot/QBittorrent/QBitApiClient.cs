@@ -139,7 +139,7 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
 
         response.EnsureSuccessStatusCode();
         var body = (await response.Content.ReadAsStringAsync(cancellationToken)).Trim();
-        if (!body.Equals("Ok.", StringComparison.OrdinalIgnoreCase))
+        if (!IsOkBody(body))
             throw new InvalidOperationException($"qBittorrent rejected the add request: {body}");
     }
 
@@ -200,6 +200,11 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
         return await httpClient.PostAsync($"{opts.BaseUrl.TrimEnd('/')}/api/v2/torrents/{action}", content, cancellationToken);
     }
 
+    // Older qBittorrent replies "Ok." on success; newer versions reply 204 No Content with an empty body.
+    // Failures ("Fails.", an error message) are always non-empty, and EnsureSuccessStatusCode already ran.
+    private static bool IsOkBody(string body) =>
+        body.Trim().Length == 0 || body.Trim().Equals("Ok.", StringComparison.OrdinalIgnoreCase);
+
     private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
     {
         if (_loggedIn)
@@ -223,7 +228,7 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
             response.EnsureSuccessStatusCode();
 
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
-            if (body.Trim() != "Ok.")
+            if (!IsOkBody(body))
                 throw new InvalidOperationException($"qBittorrent login failed: {body}");
 
             _loggedIn = true;
