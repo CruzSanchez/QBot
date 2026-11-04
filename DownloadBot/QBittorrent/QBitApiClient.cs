@@ -202,8 +202,24 @@ public sealed class QBitApiClient(HttpClient httpClient, IOptions<QBittorrentOpt
 
     // Older qBittorrent replies "Ok." on success; newer versions reply 204 No Content with an empty body.
     // Failures ("Fails.", an error message) are always non-empty, and EnsureSuccessStatusCode already ran.
-    private static bool IsOkBody(string body) =>
-        body.Trim().Length == 0 || body.Trim().Equals("Ok.", StringComparison.OrdinalIgnoreCase);
+    // Newer qBittorrent answers /torrents/add with JSON, e.g. {"success_count":1,"failure_count":0,...}.
+    private static bool IsOkBody(string body)
+    {
+        var trimmed = body.Trim();
+        if (trimmed.Length == 0 || trimmed.Equals("Ok.", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (!trimmed.StartsWith('{'))
+            return false;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(trimmed);
+            return doc.RootElement.TryGetProperty("failure_count", out var failures) && failures.GetInt32() == 0;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
 
     private async Task EnsureLoggedInAsync(CancellationToken cancellationToken)
     {
