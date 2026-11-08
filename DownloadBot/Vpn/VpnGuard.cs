@@ -16,6 +16,13 @@ public sealed class VpnOptions
 
     // Fetched *from the tunnel adapter's IP*; any 2xx answer proves traffic really flows through the VPN.
     public string ProbeUrl { get; set; } = "https://api.ipify.org";
+
+    // ExpressVPN's WireGuard protocol creates no tunnel adapter, so there is nothing to bind a probe to. When no adapter
+    // is found and this points at expressvpnctl.exe, ask ExpressVPN itself. Empty = adapter probe only.
+    public string ControlCommand { get; set; } = "";
+
+    // Split-tunnel entry that must route through the VPN for downloads to be protected.
+    public string SplitTunnelApp { get; set; } = "qBittorrent";
 }
 
 public interface IVpnGuard
@@ -58,7 +65,8 @@ public sealed class VpnGuard(IOptions<VpnOptions> options, ILogger<VpnGuard> log
     {
         var opts = options.Value;
         var address = FindTunnelAddress(opts.AdapterMatch);
-        if (address is null) return false;
+        if (address is null)
+            return !string.IsNullOrWhiteSpace(opts.ControlCommand) && await ProbeControlAsync(opts, cancellationToken);
 
         try
         {
@@ -86,6 +94,43 @@ public sealed class VpnGuard(IOptions<VpnOptions> options, ILogger<VpnGuard> log
             logger.LogDebug(ex, "VPN probe through {Address} failed", address);
             return false;
         }
+    }
+
+    // Connected AND the download app is set to use the VPN in split tunneling (otherwise "connected" proves nothing).
+    public static bool IsProtected(string connectionState, string splitApps, string app) =>
+        connectionState.Trim().Equals("Connected", StringComparison.OrdinalIgnoreCase)
+        && splitApps.Split(['\r', '\n', '|']).Any(l =>
+            l.Trim().StartsWith("vpn:", StringComparison.OrdinalIgnoreCase)
+            && l.Contains(app, StringComparison.OrdinalIgnoreCase));
+
+    private async Task<bool> ProbeControlAsync(VpnOptions opts, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var state = await RunControlAsync(opts.ControlCommand, "get connectionstate", cancellationToken);
+            if (!state.Trim().Equals("Connected", StringComparison.OrdinalIgnoreCase)) return false;
+            var apps = await RunControlAsync(opts.ControlCommand, "get split-app", cancellationToken);
+            return IsProtected(state, apps, opts.SplitTunnelApp);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException
+                                       or TaskCanceledException or OperationCanceledException)
+        {
+            if (cancellationToken.IsCancellationRequested) throw;
+            logger.LogDebug(ex, "VPN control probe failed");
+            return false;
+        }
+    }
+
+    private static async Task<string> RunControlAsync(string exe, string args, CancellationToken cancellationToken)
+    {
+        using var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, args)
+        {
+            RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
+        }) ?? throw new InvalidOperationException("expressvpnctl did not start");
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(ProbeTimeout);
+        try { return await proc.StandardOutput.ReadToEndAsync(cts.Token); }
+        finally { if (!proc.HasExited) proc.Kill(); }
     }
 
     private static IPAddress? FindTunnelAddress(string match) =>
