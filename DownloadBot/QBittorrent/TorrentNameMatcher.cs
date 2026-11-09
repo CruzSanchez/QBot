@@ -12,9 +12,24 @@ public static partial class TorrentNameMatcher
     {
         var a = AlphaNumericOnly(qbitName);
         var b = AlphaNumericOnly(StripMarker(ourTitle));
-        return a.Length > 0 && b.Length > 0 &&
-               (a.Contains(b, StringComparison.OrdinalIgnoreCase) || b.Contains(a, StringComparison.OrdinalIgnoreCase));
+        if (a.Length == 0 || b.Length == 0) return false;
+        if (a.Contains(b, StringComparison.OrdinalIgnoreCase) || b.Contains(a, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // A .torrent file names the download after its own metadata (e.g. "Title (2003) [1080p] [BluRay] [YTS.MX]"),
+        // which differs from the indexer's release name past the year, so fall back to "title + year".
+        var ka = TitleYearKey(qbitName);
+        return ka is not null && ka.Equals(TitleYearKey(StripMarker(ourTitle)), StringComparison.OrdinalIgnoreCase);
     }
+
+    private static string? TitleYearKey(string value)
+    {
+        var m = TitleThroughYearRegex().Match(value);
+        return m.Success ? AlphaNumericOnly(m.Value) : null;
+    }
+
+    [GeneratedRegex(@"^.+?(?<!\d)(?:19|20)\d{2}(?!\d)")]
+    private static partial Regex TitleThroughYearRegex();
 
     private static string AlphaNumericOnly(string value) =>
         new([.. value.Where(char.IsLetterOrDigit)]);

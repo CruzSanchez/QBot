@@ -39,6 +39,18 @@ public class TorrentNameMatcherTests
         "[DLBOT-MOVIE] The Grudge (2004) 1080p BrRip x264 -YIFY",
         "Jujutsu Kaisen S01 1080p Dual Audio WEBRip AAC x265 EMBER",
         false)]
+    [InlineData(
+        "[DLBOT-MOVIE] Uptown Girls (2003) 1080p BRRip x264 -YTS",
+        "Uptown Girls (2003) [1080p] [BluRay] [YTS.MX]",
+        true)]
+    [InlineData(
+        "[DLBOT-MOVIE] The Whole Nine Yards (2000) 1080p BRRip x264 -YTS",
+        "The Whole Nine Yards (2000) [1080p] [BluRay] [YTS.MX]",
+        true)]
+    [InlineData(
+        "[DLBOT-MOVIE] Dune (1984) 1080p BRRip x264 -YTS",
+        "Dune (2021) [1080p] [BluRay] [YTS.MX]",
+        false)]
     public void LooselyMatch_ToleratesFormattingButNotDifferentTitles(string ourTitle, string qbitName, bool expectedMatch)
     {
         Assert.Equal(expectedMatch, TorrentNameMatcher.LooselyMatch(qbitName, ourTitle));
