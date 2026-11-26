@@ -1108,10 +1108,7 @@ public sealed class DownloadBotService(
         }
 
         var source = matches[int.Parse(component.Data.Values.First())];
-        var destinations = PlexFolderFinder
-            .ValidDestinations(PlexFolderFinder.GetCategories(PlexFolderFinder.GetPlexRoots()), source)
-            .Take(25) // Discord select menus cap at 25 options
-            .ToList();
+        var destinations = PlexFolderFinder.ValidDestinations(PlexFolderFinder.GetCategories(PlexFolderFinder.GetPlexRoots()), source);
 
         if (destinations.Count == 0)
         {
@@ -1123,16 +1120,9 @@ public sealed class DownloadBotService(
             return;
         }
 
-        var menu = new SelectMenuBuilder()
-            .WithCustomId("move-dest-pick")
-            .WithPlaceholder("Choose where to move it");
-
-        foreach (var (category, index) in destinations.Select((c, i) => (c, i)))
-            menu.AddOption($"{category.Drive} • {category.Category}", index.ToString());
-
         _pendingMoveDestinations[component.Message.Id] = new PendingMoveDestinations(source, destinations);
 
-        var components = new ComponentBuilder().WithSelectMenu(menu).WithButton("Cancel", "move-cancel", ButtonStyle.Secondary).Build();
+        var components = DashboardFormatter.BuildMoveDestinationComponents(destinations);
         await component.UpdateAsync(m =>
         {
             m.Content = $"Move `{source.Path}` where?";
@@ -1933,7 +1923,7 @@ public sealed class DownloadBotService(
         "switch-drive-pick" => HandleSwitchDrivePickAsync(component),
         "delete-pick" => HandleDeletePickAsync(component),
         "move-pick" => HandleMovePickAsync(component),
-        "move-dest-pick" => HandleMoveDestinationPickAsync(component),
+        var id when id.StartsWith("move-dest-pick:") => HandleMoveDestinationPickAsync(component),
         _ => Task.CompletedTask
     };
 

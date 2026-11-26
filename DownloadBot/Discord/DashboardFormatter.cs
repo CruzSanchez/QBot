@@ -49,6 +49,28 @@ public static class DashboardFormatter
         return builder.Build();
     }
 
+    // /move's destination picker. A Discord menu caps at 25 options and every drive adds a handful of
+    // categories, so they're split across menus (option values index the whole list). The 5th row is Cancel.
+    public static MessageComponent BuildMoveDestinationComponents(IReadOnlyList<PlexCategory> destinations)
+    {
+        var builder = new ComponentBuilder();
+        var menus = destinations.Select((c, i) => (c, i)).Chunk(25).Take(4).ToList();
+
+        foreach (var (chunk, row) in menus.Select((m, r) => (m, r)))
+        {
+            var menu = new SelectMenuBuilder()
+                .WithCustomId($"move-dest-pick:{row}")
+                .WithPlaceholder($"Move to drive {chunk[0].c.Drive} – {chunk[^1].c.Drive}");
+
+            foreach (var (category, index) in chunk)
+                menu.AddOption($"{category.Drive} • {category.Category}", index.ToString());
+
+            builder.WithSelectMenu(menu, row);
+        }
+
+        return builder.WithButton("Cancel", "move-cancel", ButtonStyle.Secondary, row: menus.Count).Build();
+    }
+
     // /download's result picker. Release names can be hundreds of characters, so each is shortened: ten
     // untruncated names once pushed the description past Discord's 4096 limit, Build() threw, and the
     // command was left stuck on "thinking…" with no picker.
