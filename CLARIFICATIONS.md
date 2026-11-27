@@ -517,3 +517,10 @@ Supersedes the "1337x was tried and removed" note above.
 
 - qBittorrent is also bound to the ExpressVPN adapter (Options → Advanced → Network interface), so it can't leak if the VPN drops mid-download — the bot check only stops *new* downloads.
 - yt-dlp is not covered by the tunnel unless `yt-dlp.exe` is also set to "Only VPN" in ExpressVPN's split-tunneling list.
+
+## Season searches no longer show other seasons (2026-11-26)
+
+When a search names a season (`S01`, `Season 1`), releases that name only other seasons are
+dropped before the picker, `/download-many` and `/bulk-upload` see them. Packs covering the
+season (`S01-S06`) and titles with no season marker ("Complete Series") are kept. If nothing
+is left, the usual looser searches run, filtered the same way.

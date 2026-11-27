@@ -43,13 +43,14 @@ public static class RelaxedSearch
     public static async Task<(IReadOnlyList<SearchResult> Results, string UsedQuery)> SearchWithFallbackAsync(
         this IJackettClient jackett, string query, CancellationToken cancellationToken = default)
     {
-        var results = await jackett.SearchAsync(query, cancellationToken);
+        var results = SeasonFilter.Apply(query, await jackett.SearchAsync(query, cancellationToken));
         if (results.Count > 0)
             return (results, query);
 
         foreach (var fallback in Fallbacks(query))
         {
-            results = await jackett.SearchAsync(fallback, cancellationToken);
+            // Filtered by the original query: a fallback may have dropped the season number.
+            results = SeasonFilter.Apply(query, await jackett.SearchAsync(fallback, cancellationToken));
             if (results.Count > 0)
                 return (results, fallback);
         }
